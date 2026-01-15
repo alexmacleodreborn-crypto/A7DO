@@ -84,4 +84,4 @@ for p in state.patterns:
 # -------------------------------------------------
 
 st.subheader("🕸 Mind Map (Decohered Concepts Only)")
-st.json(state
+st.json(state)
