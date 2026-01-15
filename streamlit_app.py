@@ -1,14 +1,15 @@
 import streamlit as st
 import random
+import copy
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Persistence → Competition → Shock → Decay → Curiosity
+# Persistence → Competition → Shock → Decay → Curiosity → Choice
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Shock • Decay • Sandy’s Law")
+st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice")
 
 # =====================================================
 # CONSTANTS
@@ -24,8 +25,7 @@ SHOCK_PROBABILITY = 0.08
 SHOCK_MAGNITUDE = 0.6
 
 DECAY_RATE = 0.01
-
-MIN_AROUSAL = 0.15   # 👈 curiosity floor (critical)
+MIN_AROUSAL = 0.15
 
 # =====================================================
 # SESSION STATE (BIRTH)
@@ -50,9 +50,9 @@ if "event" not in st.session_state:
 # SQUARE MICRODYNAMICS
 # =====================================================
 
-def square_step(grid):
+def square_step(grid, scale=1.0):
     return [
-        [max(0, min(1, v + random.uniform(-0.05, 0.05))) for v in row]
+        [max(0, min(1, v + random.uniform(-0.05, 0.05) * scale)) for v in row]
         for row in grid
     ]
 
@@ -96,7 +96,7 @@ def trap_state(mean, variance):
     return Z, sigma, K, regime
 
 # =====================================================
-# PATTERN DECAY (IRREVERSIBILITY)
+# DECAY
 # =====================================================
 
 def decay_patterns():
@@ -134,7 +134,7 @@ def update_patterns(signature, regime):
                 concepts.add(signature)
 
 # =====================================================
-# EMOTION REGULATION (WITH CURIOSITY FLOOR)
+# EMOTION (WITH CURIOSITY FLOOR)
 # =====================================================
 
 def update_emotion(regime, shocked):
@@ -156,23 +156,37 @@ def update_emotion(regime, shocked):
         e["arousal"] = min(1.0, e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
-    # 👇 Curiosity floor (prevents terminal calm)
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
-# CHOICE ENGINE
+# CHOICE ENGINE (PREDICTIVE)
 # =====================================================
 
-def choose_action(regime):
-    e = st.session_state.emotion
+def predict_action_K(action, grid):
+    test_grid = copy.deepcopy(grid)
 
+    if action == "OBSERVE":
+        test_grid = square_step(test_grid, scale=0.5)
+    elif action == "EXPLORE":
+        test_grid = square_step(test_grid, scale=1.2)
+    elif action == "HOLD":
+        pass
+
+    mean, var = square_features(test_grid)
+    _, _, K, regime = trap_state(mean, var)
+
+    penalty = 0
     if regime == "ZENO":
-        return "HOLD"
+        penalty = 2.0
+    elif regime == "TRANSITION":
+        penalty = 0.5
 
-    if e["confidence"] > 0.7 and e["arousal"] < 0.35:
-        return "EXPLORE"
+    return K + penalty
 
-    return "OBSERVE"
+def choose_action(grid):
+    candidates = ["OBSERVE", "EXPLORE", "HOLD"]
+    scored = {a: predict_action_K(a, grid) for a in candidates}
+    return min(scored, key=scored.get)
 
 # =====================================================
 # EVENT ADVANCE
@@ -198,7 +212,8 @@ if st.button("▶ Advance Event"):
     signature = f"{round(mean,2)}|{round(var,2)}"
     update_patterns(signature, regime)
     update_emotion(regime, shocked)
-    action = choose_action(regime)
+
+    action = choose_action(st.session_state.square)
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
