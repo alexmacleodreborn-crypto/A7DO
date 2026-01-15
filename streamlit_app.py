@@ -6,7 +6,7 @@ import os
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE
-# SAVE + OBJECTS + CORRECT PHYSICS ORDER
+# Touch as experience • Objects • Persistent Memory
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
@@ -21,16 +21,17 @@ SAVE_FILE = "a7do_recall.json"
 
 GRID_SIZE = 8
 WORLD_LIMIT = 20.0
-OBJECT_RADIUS = 1.5   # 👈 FIX: prevent tunnelling
+OBJECT_RADIUS = 1.5
 
 MIN_AROUSAL = 0.15
 RECALL_ALPHA = 0.2
+
+TOUCH_PERSIST = 3   # 👈 touch lasts this many events
 
 # Appraisal weights
 W_K = 1.0
 W_E = 0.4
 W_T = 0.6
-W_O = 0.8
 
 # =====================================================
 # SAVE / LOAD
@@ -71,9 +72,9 @@ def init_state():
         "dir": random.choice([-1, 1]),
         "energy": 1.0,
         "touch": False,
+        "touch_timer": 0,   # 👈 latch
     }
 
-    # 🌍 OBJECT WORLD (1D)
     st.session_state.objects = [
         {"type": "resource", "x": 5.0, "strength": 0.4},
         {"type": "hazard", "x": 14.0, "strength": 0.5},
@@ -135,7 +136,7 @@ def update_body(action):
     b["x"] += b["v"] * b["dir"]
 
 # =====================================================
-# TOUCH (BOUNDARIES)
+# TOUCH (LATCHEd EXPERIENCE)
 # =====================================================
 
 def update_touch():
@@ -143,14 +144,17 @@ def update_touch():
 
     if b["x"] <= 0:
         b["x"] = 0
-        b["touch"] = True
         b["dir"] = 1
+        b["touch_timer"] = TOUCH_PERSIST
 
     elif b["x"] >= WORLD_LIMIT:
         b["x"] = WORLD_LIMIT
-        b["touch"] = True
         b["dir"] = -1
+        b["touch_timer"] = TOUCH_PERSIST
 
+    if b["touch_timer"] > 0:
+        b["touch"] = True
+        b["touch_timer"] -= 1
     else:
         b["touch"] = False
 
@@ -159,9 +163,9 @@ def update_touch():
 # =====================================================
 
 def update_vision():
-    # grid motion (novelty)
     prev = st.session_state.prev_square
     curr = st.session_state.square
+
     delta = sum(
         abs(curr[i][j] - prev[i][j])
         for i in range(GRID_SIZE)
@@ -169,7 +173,6 @@ def update_vision():
     )
     st.session_state.vision["motion"] = delta / (GRID_SIZE ** 2)
 
-    # object distance sensing
     b = st.session_state.body
     nearest = None
     nearest_dist = float("inf")
@@ -281,33 +284,27 @@ with c2:
         st.experimental_rerun()
 
 # =====================================================
-# EVENT LOOP (CORRECT ORDER)
+# EVENT LOOP (CORRECT CAUSAL ORDER)
 # =====================================================
 
 if step:
     st.session_state.event += 1
 
-    # world evolves
     st.session_state.square = square_step(st.session_state.square)
 
     mean, var = square_features(st.session_state.square)
     K = var / (1 - mean + 1e-6)
     sig = f"{round(mean,2)}|{round(var,2)}"
 
-    # choose + act
     action = choose_action()
     update_body(action)
     update_touch()
-
-    # sense AFTER movement
     update_vision()
 
-    # object interaction
     energy_before = st.session_state.body["energy"]
     apply_object_effects()
     energy_delta = st.session_state.body["energy"] - energy_before
 
-    # evaluate + remember
     val = appraisal(sig, K, energy_delta, st.session_state.body["touch"])
     recall_update(sig, K, val)
     update_emotion(val)
@@ -319,6 +316,7 @@ if step:
         "x": round(st.session_state.body["x"], 2),
         "energy": round(st.session_state.body["energy"], 2),
         "touch": st.session_state.body["touch"],
+        "touch_timer": st.session_state.body["touch_timer"],
         "vision_object": st.session_state.vision["object"],
         "distance": st.session_state.vision["distance"],
         "action": action,
