@@ -153,7 +153,6 @@ def update_emotion(regime, shocked):
         e["confidence"] = max(0.0, e["confidence"] - 0.05)
 
     elif regime == "ZENO":
- fb
         e["arousal"] = min(1.0, e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
