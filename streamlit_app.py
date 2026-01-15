@@ -19,7 +19,7 @@ MAX_CONCEPTS = 6
 DECOHERENCE_THRESHOLD = 3
 REPLACEMENT_THRESHOLD = 5
 
-SHOCK_PROBABILITY = 0.08      # chance per event
+SHOCK_PROBABILITY = 0.04      # chance per event
 SHOCK_MAGNITUDE = 0.6         # strength of disturbance
 
 # =====================================================
