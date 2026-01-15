@@ -1,29 +1,38 @@
 import streamlit as st
 import random
-import math
 
 # =====================================================
-# A7DO — BORN INTELLIGENCE (MOBILE SINGLE-FILE CORE)
+# A7DO — BORN INTELLIGENCE (SINGLE FILE)
+# Persistence → Competition → Selection
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Decoherence • Sandy’s Law • No Training")
+st.caption("Persistence • Competition • Decoherence • Sandy’s Law • No Training")
 
 # =====================================================
-# SESSION STATE
+# CONSTANTS (COGNITIVE CONSTRAINTS)
+# =====================================================
+
+GRID_SIZE = 8
+MAX_CONCEPTS = 6              # cognitive capacity
+DECOHERENCE_THRESHOLD = 3     # persistence needed
+REPLACEMENT_THRESHOLD = 5     # must be stronger to replace
+
+# =====================================================
+# SESSION STATE (BIRTH)
 # =====================================================
 
 if "event" not in st.session_state:
     st.session_state.event = 0
-    st.session_state.square = [[random.random() for _ in range(8)] for _ in range(8)]
+    st.session_state.square = [[random.random() for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
     st.session_state.patterns = {}
     st.session_state.concepts = set()
     st.session_state.ledger = []
     st.session_state.emotion = {
-        "arousal": 0.3,
+        "arousal": 0.4,
         "valence": 0.0,
-        "confidence": 0.2,
+        "confidence": 0.3,
     }
 
 # =====================================================
@@ -31,25 +40,24 @@ if "event" not in st.session_state:
 # =====================================================
 
 def square_step(grid):
-    new = []
-    for row in grid:
-        new.append([max(0, min(1, v + random.uniform(-0.05, 0.05))) for v in row])
-    return new
+    return [
+        [max(0, min(1, v + random.uniform(-0.05, 0.05))) for v in row]
+        for row in grid
+    ]
 
 def square_features(grid):
     flat = [v for r in grid for v in r]
-    return {
-        "mean": sum(flat) / len(flat),
-        "variance": sum((v - sum(flat)/len(flat))**2 for v in flat) / len(flat)
-    }
+    mean = sum(flat) / len(flat)
+    var = sum((v - mean) ** 2 for v in flat) / len(flat)
+    return mean, var
 
 # =====================================================
-# SANDY’S LAW TRAP (SIMPLIFIED BUT STRUCTURAL)
+# SANDY’S LAW TRAP (STRUCTURAL)
 # =====================================================
 
-def trap_state(features):
-    sigma = features["variance"]
-    Z = 1.0 - features["mean"]
+def trap_state(mean, variance):
+    sigma = variance
+    Z = 1.0 - mean
     K = sigma / (Z + 1e-6)
 
     if K > 1.1:
@@ -62,72 +70,100 @@ def trap_state(features):
     return Z, sigma, K, regime
 
 # =====================================================
-# PATTERNS & DECOHERENCE
+# PATTERNS → COMPETITION → DECOHERENCE
 # =====================================================
 
-def observe_pattern(features):
-    return f"{round(features['mean'],2)}|{round(features['variance'],2)}"
+def update_patterns(signature, regime):
+    patterns = st.session_state.patterns
+    concepts = st.session_state.concepts
 
-def update_patterns(sig, regime):
-    p = st.session_state.patterns.setdefault(sig, {"count": 0, "decohered": False})
+    p = patterns.setdefault(signature, {"count": 0, "decohered": False})
+
     if regime == "CLASSICAL":
         p["count"] += 1
-    if p["count"] >= 3:
-        p["decohered"] = True
-        st.session_state.concepts.add(sig)
+
+    # Attempt decoherence
+    if p["count"] >= DECOHERENCE_THRESHOLD and not p["decohered"]:
+
+        # Capacity available
+        if len(concepts) < MAX_CONCEPTS:
+            p["decohered"] = True
+            concepts.add(signature)
+
+        else:
+            # Find weakest existing concept
+            weakest = min(concepts, key=lambda c: patterns[c]["count"])
+
+            # Replace only if significantly stronger
+            if p["count"] > patterns[weakest]["count"] + REPLACEMENT_THRESHOLD:
+                patterns[weakest]["decohered"] = False
+                concepts.remove(weakest)
+
+                p["decohered"] = True
+                concepts.add(signature)
 
 # =====================================================
-# EMOTION REGULATION
+# EMOTION REGULATION (PHYSICAL, NOT SYMBOLIC)
 # =====================================================
 
 def update_emotion(regime):
     e = st.session_state.emotion
+
     if regime == "CLASSICAL":
-        e["confidence"] = min(1, e["confidence"] + 0.05)
-        e["arousal"] = max(0, e["arousal"] - 0.02)
+        e["confidence"] = min(1.0, e["confidence"] + 0.03)
+        e["arousal"] = max(0.0, e["arousal"] - 0.02)
+
+    elif regime == "TRANSITION":
+        e["arousal"] = min(1.0, e["arousal"] + 0.05)
+        e["confidence"] = max(0.0, e["confidence"] - 0.03)
+
     elif regime == "ZENO":
-        e["arousal"] = min(1, e["arousal"] + 0.1)
-        e["confidence"] = max(0, e["confidence"] - 0.1)
+        e["arousal"] = min(1.0, e["arousal"] + 0.1)
+        e["confidence"] = max(0.0, e["confidence"] - 0.1)
 
 # =====================================================
-# CHOICE ENGINE
+# CHOICE ENGINE (CONSTRAINED)
 # =====================================================
 
 def choose_action(regime):
+    e = st.session_state.emotion
+
     if regime == "ZENO":
         return "HOLD"
-    if st.session_state.emotion["confidence"] > 0.6:
+
+    if e["confidence"] > 0.7 and e["arousal"] < 0.3:
         return "EXPLORE"
+
     return "OBSERVE"
 
 # =====================================================
-# ADVANCE EVENT
+# EVENT ADVANCE
 # =====================================================
 
 if st.button("▶ Advance Event"):
     st.session_state.event += 1
 
     st.session_state.square = square_step(st.session_state.square)
-    feats = square_features(st.session_state.square)
-    Z, sigma, K, regime = trap_state(feats)
+    mean, var = square_features(st.session_state.square)
+    Z, sigma, K, regime = trap_state(mean, var)
 
-    sig = observe_pattern(feats)
-    update_patterns(sig, regime)
+    signature = f"{round(mean,2)}|{round(var,2)}"
+    update_patterns(signature, regime)
     update_emotion(regime)
     action = choose_action(regime)
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
-        "Z": round(Z,3),
-        "Σ": round(sigma,3),
-        "K": round(K,3),
+        "Z": round(Z, 3),
+        "Σ": round(sigma, 3),
+        "K": round(K, 3),
         "regime": regime,
-        "pattern": sig,
+        "pattern": signature,
         "action": action
     })
 
 # =====================================================
-# RESET (REBIRTH)
+# REBIRTH
 # =====================================================
 
 if st.button("⟲ Rebirth"):
@@ -149,16 +185,17 @@ if st.session_state.ledger:
     st.write("**Regime:**", last["regime"])
     st.write("**Chosen Action:**", last["action"])
 
-st.subheader("📌 Persistent Patterns")
-for k, v in st.session_state.patterns.items():
-    st.write(k, "→", v)
-
-st.subheader("🧠 Decohered Concepts")
-st.write(list(st.session_state.concepts))
+st.subheader("🧠 Active Concepts (Competitive)")
+for c in st.session_state.concepts:
+    st.write(
+        c,
+        "→ persistence:",
+        st.session_state.patterns[c]["count"]
+    )
 
 st.subheader("❤️ Emotion State")
 st.json(st.session_state.emotion)
 
-with st.expander("📜 Ledger"):
+with st.expander("📜 Ledger (Last 10 Events)"):
     for row in st.session_state.ledger[-10:]:
         st.write(row)
