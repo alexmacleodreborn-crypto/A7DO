@@ -4,18 +4,19 @@ import copy
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Embodiment + Sensing + Choice
+# Embodiment • Vision • Touch • Choice
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice • Body")
+st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice • Body • Vision • Touch")
 
 # =====================================================
 # CONSTANTS
 # =====================================================
 
 GRID_SIZE = 8
+WORLD_LIMIT = 20.0   # spatial boundary for TOUCH
 
 MAX_CONCEPTS = 6
 DECOHERENCE_THRESHOLD = 3
@@ -39,6 +40,7 @@ if "event" not in st.session_state:
         [random.random() for _ in range(GRID_SIZE)]
         for _ in range(GRID_SIZE)
     ]
+    st.session_state.prev_square = copy.deepcopy(st.session_state.square)
 
     # Cognition
     st.session_state.patterns = {}
@@ -52,15 +54,21 @@ if "event" not in st.session_state:
         "confidence": 0.3,
     }
 
-    # Body (Embodiment)
+    # Body
     st.session_state.body = {
         "x": 0.0,
         "v": 0.0,
-        "energy": 1.0
+        "energy": 1.0,
+        "touch": False
+    }
+
+    # Senses
+    st.session_state.vision = {
+        "motion": 0.0
     }
 
 # =====================================================
-# SQUARE MICRODYNAMICS
+# ENVIRONMENT DYNAMICS
 # =====================================================
 
 def square_step(grid, scale=1.0):
@@ -72,7 +80,6 @@ def square_step(grid, scale=1.0):
 def apply_shock(grid):
     cx = random.randint(0, GRID_SIZE - 1)
     cy = random.randint(0, GRID_SIZE - 1)
-
     for i in range(GRID_SIZE):
         for j in range(GRID_SIZE):
             dist = abs(i - cx) + abs(j - cy)
@@ -89,6 +96,34 @@ def square_features(grid):
     mean = sum(flat) / len(flat)
     var = sum((v - mean) ** 2 for v in flat) / len(flat)
     return mean, var
+
+# =====================================================
+# VISION (MOTION PERCEPTION)
+# =====================================================
+
+def update_vision():
+    prev = st.session_state.prev_square
+    curr = st.session_state.square
+    delta = 0.0
+
+    for i in range(GRID_SIZE):
+        for j in range(GRID_SIZE):
+            delta += abs(curr[i][j] - prev[i][j])
+
+    st.session_state.vision["motion"] = delta / (GRID_SIZE ** 2)
+    st.session_state.prev_square = copy.deepcopy(curr)
+
+# =====================================================
+# TOUCH (BOUNDARY PERCEPTION)
+# =====================================================
+
+def update_touch():
+    b = st.session_state.body
+    if b["x"] <= 0 or b["x"] >= WORLD_LIMIT:
+        b["touch"] = True
+        b["v"] = 0.0
+    else:
+        b["touch"] = False
 
 # =====================================================
 # SANDY’S LAW TRAP
@@ -109,7 +144,7 @@ def trap_state(mean, variance):
     return Z, sigma, K, regime
 
 # =====================================================
-# PATTERN DECAY (IRREVERSIBILITY)
+# DECAY
 # =====================================================
 
 def decay_patterns():
@@ -118,7 +153,7 @@ def decay_patterns():
             p["count"] = max(0, p["count"] - DECAY_RATE)
 
 # =====================================================
-# PATTERNS → COMPETITION → DECOHERENCE
+# PATTERN FORMATION
 # =====================================================
 
 def update_patterns(signature, regime):
@@ -143,7 +178,7 @@ def update_patterns(signature, regime):
                 concepts.add(signature)
 
 # =====================================================
-# BODY DYNAMICS (EMBODIMENT)
+# BODY DYNAMICS (REST FIX INCLUDED)
 # =====================================================
 
 def update_body(action):
@@ -151,25 +186,26 @@ def update_body(action):
 
     if action == "EXPLORE":
         b["v"] = min(1.0, b["v"] + 0.1)
-        b["energy"] = max(0.0, b["energy"] - 0.05)
+        b["energy"] = max(0.0, b["energy"] - 0.06)
 
     elif action == "OBSERVE":
-        b["v"] = max(0.0, b["v"] - 0.05)
-        b["energy"] = min(1.0, b["energy"] + 0.03)
+        b["v"] = max(0.0, b["v"] - 0.08)
+        b["energy"] = min(1.0, b["energy"] + 0.05)
 
     elif action == "HOLD":
         b["v"] = 0.0
-        b["energy"] = min(1.0, b["energy"] + 0.01)
+        b["energy"] = min(1.0, b["energy"] + 0.1)
 
     b["x"] += b["v"]
 
 # =====================================================
-# EMOTION REGULATION + PROPRIOCEPTION
+# EMOTION + PROPRIOCEPTION + SENSES
 # =====================================================
 
 def update_emotion(regime, shocked):
     e = st.session_state.emotion
     b = st.session_state.body
+    v = st.session_state.vision
 
     if shocked:
         e["arousal"] = min(1.0, e["arousal"] + 0.25)
@@ -187,11 +223,18 @@ def update_emotion(regime, shocked):
         e["arousal"] = min(1.0, e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
-    # Proprioception (body → mind)
+    # Proprioception
     e["arousal"] = min(1.0, e["arousal"] + 0.1 * b["v"])
-    e["confidence"] = max(0.0, e["confidence"] - 0.2 * (1.0 - b["energy"]))
+    e["confidence"] = max(0.0, e["confidence"] - 0.1 * (1.0 - b["energy"]))
 
-    # Curiosity floor
+    # Vision → curiosity
+    e["arousal"] = min(1.0, e["arousal"] + 0.4 * v["motion"])
+
+    # Touch → caution
+    if b["touch"]:
+        e["arousal"] = min(1.0, e["arousal"] + 0.2)
+        e["confidence"] = max(0.0, e["confidence"] - 0.1)
+
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
@@ -199,16 +242,14 @@ def update_emotion(regime, shocked):
 # =====================================================
 
 def predict_action_K(action, grid):
-    test_grid = copy.deepcopy(grid)
+    test = copy.deepcopy(grid)
 
     if action == "OBSERVE":
-        test_grid = square_step(test_grid, scale=0.5)
+        test = square_step(test, scale=0.5)
     elif action == "EXPLORE":
-        test_grid = square_step(test_grid, scale=1.2)
-    elif action == "HOLD":
-        pass
+        test = square_step(test, scale=1.2)
 
-    mean, var = square_features(test_grid)
+    mean, var = square_features(test)
     _, _, K, regime = trap_state(mean, var)
 
     penalty = 0
@@ -220,8 +261,8 @@ def predict_action_K(action, grid):
     return K + penalty
 
 def choose_action(grid):
-    candidates = ["OBSERVE", "EXPLORE", "HOLD"]
-    scored = {a: predict_action_K(a, grid) for a in candidates}
+    actions = ["OBSERVE", "EXPLORE", "HOLD"]
+    scored = {a: predict_action_K(a, grid) for a in actions}
     return min(scored, key=scored.get)
 
 # =====================================================
@@ -240,6 +281,7 @@ if st.button("▶ Advance Event"):
         st.session_state.square = apply_shock(st.session_state.square)
         shocked = True
 
+    update_vision()
     decay_patterns()
 
     mean, var = square_features(st.session_state.square)
@@ -251,52 +293,29 @@ if st.button("▶ Advance Event"):
 
     action = choose_action(st.session_state.square)
     update_body(action)
+    update_touch()
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
-        "shock": shocked,
-        "Z": round(Z, 3),
-        "Σ": round(sigma, 3),
-        "K": round(K, 3),
-        "regime": regime,
-        "pattern": signature,
         "action": action,
+        "regime": regime,
+        "shock": shocked,
+        "vision_motion": round(st.session_state.vision["motion"], 3),
         "body": dict(st.session_state.body)
     })
-
-# =====================================================
-# REBIRTH
-# =====================================================
-
-if st.button("⟲ Rebirth"):
-    st.session_state.clear()
-    st.experimental_rerun()
 
 # =====================================================
 # DISPLAY
 # =====================================================
 
-if st.session_state.ledger:
-    last = st.session_state.ledger[-1]
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Trap Z", last["Z"])
-    c2.metric("Entropy Σ", last["Σ"])
-    c3.metric("Portal K", last["K"])
-
-    st.write("**Regime:**", last["regime"])
-    st.write("**Chosen Action:**", last["action"])
-    st.write("**Shock Event:**", "YES ⚡" if last["shock"] else "No")
-
-st.subheader("🧠 Active Concepts")
-for c in st.session_state.concepts:
-    st.write(c, "→ persistence:", round(st.session_state.patterns[c]["count"], 2))
-
-st.subheader("❤️ Emotion State")
+st.subheader("🧠 Emotion")
 st.json(st.session_state.emotion)
 
 st.subheader("🧍 Body Awareness")
 st.json(st.session_state.body)
+
+st.subheader("👁️ Vision")
+st.json(st.session_state.vision)
 
 with st.expander("📜 Ledger (Last 10 Events)"):
     for row in st.session_state.ledger[-10:]:
