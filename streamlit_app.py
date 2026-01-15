@@ -4,12 +4,12 @@ import copy
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Embodiment • Vision • Touch • Recall • Valence • Choice
+# Embodiment • Vision • Touch • Recall • Valence • Choice • Escape
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice • Body • Vision • Touch • Recall")
+st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice • Body • Vision • Touch • Recall • Escape")
 
 # =====================================================
 # CONSTANTS
@@ -29,15 +29,15 @@ DECAY_RATE = 0.01
 MIN_AROUSAL = 0.15
 
 # Recall learning rates
-RECALL_ALPHA = 0.20          # exponential moving average rate
-CONF_LEARN_RATE = 0.06       # how fast confidence-floor increases with good predictions
-CONF_FORGET_RATE = 0.03      # how fast confidence-floor decreases with bad predictions
+RECALL_ALPHA = 0.20
+CONF_LEARN_RATE = 0.06
+CONF_FORGET_RATE = 0.03
 
-# Appraisal weights (valence conversion)
-W_K = 1.00   # stability prediction error weight
-W_E = 0.35   # energy deviation weight
-W_T = 0.60   # touch penalty weight
-W_M = 0.25   # motion novelty reward weight
+# Appraisal weights
+W_K = 1.00
+W_E = 0.35
+W_T = 0.60
+W_M = 0.25
 
 # =====================================================
 # SESSION STATE (BIRTH)
@@ -64,8 +64,7 @@ def init_state():
     # Senses
     st.session_state.vision = {"motion": 0.0}
 
-    # Recall memory (evaluated experience)
-    # signature -> stats
+    # Recall memory
     st.session_state.recall = {}
 
 if "event" not in st.session_state:
@@ -109,7 +108,7 @@ def square_features(grid):
     return mean, var
 
 # =====================================================
-# VISION (MOTION PERCEPTION)
+# VISION
 # =====================================================
 
 def update_vision():
@@ -123,7 +122,7 @@ def update_vision():
     st.session_state.prev_square = copy.deepcopy(curr)
 
 # =====================================================
-# TOUCH (BOUNDARY PERCEPTION)
+# TOUCH
 # =====================================================
 
 def update_touch():
@@ -158,17 +157,13 @@ def trap_state(mean, variance):
     return Z, sigma, K, regime
 
 # =====================================================
-# PATTERN DECAY (IRREVERSIBILITY)
+# PATTERN DECAY + FORMATION
 # =====================================================
 
 def decay_patterns():
     for p in st.session_state.patterns.values():
         if p["count"] > 0:
             p["count"] = max(0, p["count"] - DECAY_RATE)
-
-# =====================================================
-# PATTERNS → COMPETITION → DECOHERENCE
-# =====================================================
 
 def update_patterns(signature, regime):
     patterns = st.session_state.patterns
@@ -192,7 +187,7 @@ def update_patterns(signature, regime):
                 concepts.add(signature)
 
 # =====================================================
-# BODY DYNAMICS (REST BASIN FIX)
+# BODY (REST BASIN)
 # =====================================================
 
 def update_body(action):
@@ -213,13 +208,12 @@ def update_body(action):
     b["x"] += b["v"]
 
 # =====================================================
-# RECALL — EXPECTATION & EVALUATION MEMORY
+# RECALL
 # =====================================================
 
 def recall_get(signature):
     r = st.session_state.recall.get(signature)
     if r is None:
-        # sensible defaults (neutral expectations)
         r = {
             "count": 0,
             "expected_K": 0.30,
@@ -227,7 +221,8 @@ def recall_get(signature):
             "expected_motion": 0.10,
             "touch_rate": 0.0,
             "valence": 0.0,
-            "conf_floor": 0.20
+            "conf_floor": 0.20,
+            "escape_bias": 0.0  # 👈 NEW
         }
         st.session_state.recall[signature] = r
     return r
@@ -235,8 +230,6 @@ def recall_get(signature):
 def recall_update(signature, actual_K, energy, motion, touch_flag):
     r = recall_get(signature)
     r["count"] += 1
-
-    # Update expectations
     r["expected_K"] = ema(r["expected_K"], actual_K)
     r["expected_energy"] = ema(r["expected_energy"], energy)
     r["expected_motion"] = ema(r["expected_motion"], motion)
@@ -245,36 +238,41 @@ def recall_update(signature, actual_K, energy, motion, touch_flag):
 def appraisal_valence(signature, actual_K, energy, motion, touch_flag):
     r = recall_get(signature)
 
-    # Lower K is "better" (more stable). So improvement is expected_K - actual_K
-    dK = (r["expected_K"] - actual_K)
+    dK = (r["expected_K"] - actual_K)        # lower K is better
     dE = (energy - r["expected_energy"])
     dM = (motion - r["expected_motion"])
     t = 1.0 if touch_flag else 0.0
 
     raw = (W_K * dK) + (W_E * dE) + (W_M * dM) - (W_T * t)
-
-    # squash into [-1, +1] softly
     val = max(-1.0, min(1.0, raw * 2.5))
-    return val, abs(actual_K - r["expected_K"])
+
+    pred_err = abs(actual_K - r["expected_K"])
+    return val, pred_err
 
 def recall_update_valence_and_conf(signature, valence, pred_err):
     r = recall_get(signature)
-
-    # valence stored as EMA
     r["valence"] = ema(r["valence"], valence)
 
-    # Confidence floor increases when prediction error is small, decreases when large
-    # pred_err ~0.0 good, >0.15 poor (tunable)
-    good = max(0.0, 0.15 - pred_err) / 0.15   # 1 when err=0, 0 when err>=0.15
-    bad = max(0.0, pred_err - 0.15) / 0.35    # grows after 0.15
+    good = max(0.0, 0.15 - pred_err) / 0.15
+    bad = max(0.0, pred_err - 0.15) / 0.35
 
     r["conf_floor"] = clamp(
         r["conf_floor"] + CONF_LEARN_RATE * good - CONF_FORGET_RATE * bad,
         0.0, 1.0
     )
 
+def recall_update_escape(signature, touch_flag, motion):
+    r = recall_get(signature)
+    if touch_flag:
+        # Encourage escaping by rewarding low-motion stabilization AFTER moving away
+        # At boundary, motion is often low; so we use a small nudge that grows with negative valence.
+        # This becomes a "get unstuck" memory trace.
+        r["escape_bias"] = ema(r["escape_bias"], 1.0 - motion)
+    else:
+        r["escape_bias"] = ema(r["escape_bias"], 0.0)
+
 # =====================================================
-# EMOTION REGULATION + PROPRIOCEPTION + SENSES + RECALL CONSOLIDATION
+# EMOTION
 # =====================================================
 
 def update_emotion(regime, shocked, signature):
@@ -283,54 +281,46 @@ def update_emotion(regime, shocked, signature):
     v = st.session_state.vision
     r = recall_get(signature)
 
-    # Regime-driven updates
     if shocked:
         e["arousal"] = clamp(e["arousal"] + 0.25)
         e["confidence"] = max(0.0, e["confidence"] - 0.25)
-
     elif regime == "CLASSICAL":
         e["confidence"] = clamp(e["confidence"] + 0.03)
         e["arousal"] = max(0.0, e["arousal"] - 0.02)
-
     elif regime == "TRANSITION":
         e["arousal"] = clamp(e["arousal"] + 0.06)
         e["confidence"] = max(0.0, e["confidence"] - 0.05)
-
     elif regime == "ZENO":
         e["arousal"] = clamp(e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
-    # Proprioception (body → mind)
+    # Proprioception
     e["arousal"] = clamp(e["arousal"] + 0.10 * b["v"])
     e["confidence"] = max(0.0, e["confidence"] - 0.10 * (1.0 - b["energy"]))
 
-    # Vision (motion) contributes to curiosity
+    # Vision curiosity
     e["arousal"] = clamp(e["arousal"] + 0.40 * v["motion"])
 
-    # Touch contributes to caution
+    # Touch caution
     if b["touch"]:
         e["arousal"] = clamp(e["arousal"] + 0.20)
         e["confidence"] = max(0.0, e["confidence"] - 0.10)
 
-    # Curiosity floor
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
-    # Recall consolidation: confidence cannot fall below learned conf_floor for known signatures
+    # Confidence cannot fall below learned floor
     e["confidence"] = max(e["confidence"], r["conf_floor"])
 
 # =====================================================
-# CHOICE ENGINE (PREDICTIVE + MEMORY-BIASED)
+# CHOICE (PREDICTIVE + MEMORY + ESCAPE)
 # =====================================================
 
 def predict_action_K(action, grid):
     test = copy.deepcopy(grid)
-
     if action == "OBSERVE":
         test = square_step(test, scale=0.5)
     elif action == "EXPLORE":
         test = square_step(test, scale=1.2)
-    elif action == "HOLD":
-        pass
 
     mean, var = square_features(test)
     _, _, K, regime = trap_state(mean, var)
@@ -340,7 +330,6 @@ def predict_action_K(action, grid):
         penalty = 2.0
     elif regime == "TRANSITION":
         penalty = 0.5
-
     return K + penalty
 
 def choose_action(signature, grid):
@@ -353,7 +342,7 @@ def choose_action(signature, grid):
     for a in actions:
         base = predict_action_K(a, grid)
 
-        # Embodied preference: if energy low, prefer HOLD/OBSERVE
+        # Energy bias
         energy_bias = 0.0
         if b["energy"] < 0.35:
             if a == "EXPLORE":
@@ -361,14 +350,32 @@ def choose_action(signature, grid):
             elif a == "HOLD":
                 energy_bias -= 0.10
 
-        # Memory bias: if signature has negative valence, damp EXPLORE
+        # Memory bias
         mem_bias = 0.0
         if r["valence"] < -0.15 and a == "EXPLORE":
             mem_bias += 0.25
         if r["valence"] > 0.15 and a == "OBSERVE":
-            mem_bias += 0.05  # small push to act when it's historically good
+            mem_bias += 0.05
 
-        scored[a] = base + energy_bias + mem_bias
+        # ESCAPE BIAS (NEW)
+        # If touching boundary and valence negative, penalize HOLD strongly and encourage EXPLORE.
+        escape_bias = 0.0
+        if b["touch"] and r["valence"] < -0.10:
+            if a == "HOLD":
+                escape_bias += 0.70
+            elif a == "OBSERVE":
+                escape_bias += 0.25
+            elif a == "EXPLORE":
+                escape_bias -= 0.20
+
+        # Additional nudge based on learned escape_bias trace
+        if b["touch"] and r["escape_bias"] > 0.2:
+            if a == "HOLD":
+                escape_bias += 0.20
+            if a == "EXPLORE":
+                escape_bias -= 0.10
+
+        scored[a] = base + energy_bias + mem_bias + escape_bias
 
     return min(scored, key=scored.get), scored
 
@@ -393,7 +400,6 @@ with cC:
 
 if step_btn:
     st.session_state.event += 1
-
     shocked = False
 
     # Environment update
@@ -402,7 +408,7 @@ if step_btn:
         st.session_state.square = apply_shock(st.session_state.square)
         shocked = True
 
-    # Vision update (motion)
+    # Senses
     update_vision()
 
     # Trap + signature
@@ -410,18 +416,18 @@ if step_btn:
     Z, sigma, K, regime = trap_state(mean, var)
     signature = f"{round(mean,2)}|{round(var,2)}"
 
-    # Decay + pattern update
+    # Decay + patterns
     decay_patterns()
     update_patterns(signature, regime)
 
-    # Choose action using current signature + memory bias
+    # Action choice (uses previous touch state)
     action, action_scores = choose_action(signature, st.session_state.square)
 
-    # Body update and touch
+    # Body + touch update
     update_body(action)
     update_touch()
 
-    # Appraisal (convert sensation → valence) and update recall
+    # Appraisal + recall updates
     motion = st.session_state.vision["motion"]
     energy = st.session_state.body["energy"]
     touch_flag = st.session_state.body["touch"]
@@ -429,8 +435,9 @@ if step_btn:
     valence, pred_err = appraisal_valence(signature, K, energy, motion, touch_flag)
     recall_update(signature, K, energy, motion, touch_flag)
     recall_update_valence_and_conf(signature, valence, pred_err)
+    recall_update_escape(signature, touch_flag, motion)
 
-    # Emotion update (now includes recall confidence floor)
+    # Emotion update
     st.session_state.emotion["valence"] = valence
     update_emotion(regime, shocked, signature)
 
@@ -440,8 +447,6 @@ if step_btn:
         "signature": signature,
         "regime": regime,
         "shock": shocked,
-        "Z": round(Z, 3),
-        "Σ": round(sigma, 3),
         "K": round(K, 3),
         "motion": round(motion, 3),
         "touch": touch_flag,
@@ -450,6 +455,7 @@ if step_btn:
         "valence": round(valence, 3),
         "pred_err": round(pred_err, 3),
         "conf_floor": round(recall_get(signature)["conf_floor"], 3),
+        "escape_bias": round(recall_get(signature)["escape_bias"], 3),
         "body": dict(st.session_state.body),
         "emotion": dict(st.session_state.emotion)
     })
@@ -488,15 +494,15 @@ st.subheader("🧠 Active Concepts (Competitive)")
 for c in sorted(list(st.session_state.concepts)):
     st.write(c, "→ persistence:", round(st.session_state.patterns[c]["count"], 2))
 
-# Recall summary: show top learned signatures by count
 st.subheader("🗃️ Recall (Evaluated Memory)")
 recall_items = list(st.session_state.recall.items())
 recall_items.sort(key=lambda kv: kv[1]["count"], reverse=True)
+
 for sig, r in recall_items[:8]:
     st.write(
         f"**{sig}** | n={r['count']} | expK={r['expected_K']:.3f} | "
         f"val={r['valence']:.3f} | conf_floor={r['conf_floor']:.3f} | "
-        f"touch_rate={r['touch_rate']:.2f} | exp_motion={r['expected_motion']:.3f}"
+        f"escape_bias={r['escape_bias']:.3f} | touch_rate={r['touch_rate']:.2f}"
     )
 
 with st.expander("📜 Ledger (Last 15 Events)"):
