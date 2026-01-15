@@ -3,24 +3,29 @@ import random
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Persistence → Competition → Shock → Learning
+# Persistence → Competition → Shock → Decay → Curiosity
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Shock • Decoherence • Sandy’s Law")
+st.caption("Persistence • Competition • Shock • Decay • Sandy’s Law")
 
 # =====================================================
-# CONSTANTS (COGNITIVE + ENVIRONMENTAL)
+# CONSTANTS
 # =====================================================
 
 GRID_SIZE = 8
+
 MAX_CONCEPTS = 6
 DECOHERENCE_THRESHOLD = 3
 REPLACEMENT_THRESHOLD = 5
 
-SHOCK_PROBABILITY = 0.04      # chance per event
-SHOCK_MAGNITUDE = 0.6         # strength of disturbance
+SHOCK_PROBABILITY = 0.08
+SHOCK_MAGNITUDE = 0.6
+
+DECAY_RATE = 0.01
+
+MIN_AROUSAL = 0.15   # 👈 curiosity floor (critical)
 
 # =====================================================
 # SESSION STATE (BIRTH)
@@ -28,7 +33,10 @@ SHOCK_MAGNITUDE = 0.6         # strength of disturbance
 
 if "event" not in st.session_state:
     st.session_state.event = 0
-    st.session_state.square = [[random.random() for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+    st.session_state.square = [
+        [random.random() for _ in range(GRID_SIZE)]
+        for _ in range(GRID_SIZE)
+    ]
     st.session_state.patterns = {}
     st.session_state.concepts = set()
     st.session_state.ledger = []
@@ -49,7 +57,6 @@ def square_step(grid):
     ]
 
 def apply_shock(grid):
-    # Non-local structural disturbance
     cx = random.randint(0, GRID_SIZE - 1)
     cy = random.randint(0, GRID_SIZE - 1)
 
@@ -89,6 +96,15 @@ def trap_state(mean, variance):
     return Z, sigma, K, regime
 
 # =====================================================
+# PATTERN DECAY (IRREVERSIBILITY)
+# =====================================================
+
+def decay_patterns():
+    for p in st.session_state.patterns.values():
+        if p["count"] > 0:
+            p["count"] = max(0, p["count"] - DECAY_RATE)
+
+# =====================================================
 # PATTERNS → COMPETITION → DECOHERENCE
 # =====================================================
 
@@ -118,7 +134,7 @@ def update_patterns(signature, regime):
                 concepts.add(signature)
 
 # =====================================================
-# EMOTION REGULATION (PHYSICAL)
+# EMOTION REGULATION (WITH CURIOSITY FLOOR)
 # =====================================================
 
 def update_emotion(regime, shocked):
@@ -127,9 +143,8 @@ def update_emotion(regime, shocked):
     if shocked:
         e["arousal"] = min(1.0, e["arousal"] + 0.25)
         e["confidence"] = max(0.0, e["confidence"] - 0.25)
-        return
 
-    if regime == "CLASSICAL":
+    elif regime == "CLASSICAL":
         e["confidence"] = min(1.0, e["confidence"] + 0.03)
         e["arousal"] = max(0.0, e["arousal"] - 0.02)
 
@@ -138,8 +153,12 @@ def update_emotion(regime, shocked):
         e["confidence"] = max(0.0, e["confidence"] - 0.05)
 
     elif regime == "ZENO":
+ fb
         e["arousal"] = min(1.0, e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
+
+    # 👇 Curiosity floor (prevents terminal calm)
+    e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
 # CHOICE ENGINE
@@ -151,7 +170,7 @@ def choose_action(regime):
     if regime == "ZENO":
         return "HOLD"
 
-    if e["confidence"] > 0.7 and e["arousal"] < 0.3:
+    if e["confidence"] > 0.7 and e["arousal"] < 0.35:
         return "EXPLORE"
 
     return "OBSERVE"
@@ -160,15 +179,19 @@ def choose_action(regime):
 # EVENT ADVANCE
 # =====================================================
 
+force_shock = st.button("⚡ Force Shock")
+
 if st.button("▶ Advance Event"):
     st.session_state.event += 1
 
     shocked = False
     st.session_state.square = square_step(st.session_state.square)
 
-    if random.random() < SHOCK_PROBABILITY:
+    if force_shock or random.random() < SHOCK_PROBABILITY:
         st.session_state.square = apply_shock(st.session_state.square)
         shocked = True
+
+    decay_patterns()
 
     mean, var = square_features(st.session_state.square)
     Z, sigma, K, regime = trap_state(mean, var)
@@ -215,15 +238,10 @@ if st.session_state.ledger:
 
 st.subheader("🧠 Active Concepts (Competitive)")
 for c in st.session_state.concepts:
-    st.write(
-        c,
-        "→ persistence:",
-        st.session_state.patterns[c]["count"]
-    )
+    st.write(c, "→ persistence:", round(st.session_state.patterns[c]["count"], 2))
 
 st.subheader("❤️ Emotion State")
 st.json(st.session_state.emotion)
 
 with st.expander("📜 Ledger (Last 10 Events)"):
-    for row in st.session_state.ledger[-10:]:
-        st.write(row)
+    for row in
