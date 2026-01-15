@@ -3,21 +3,24 @@ import random
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Persistence → Competition → Selection
+# Persistence → Competition → Shock → Learning
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Decoherence • Sandy’s Law • No Training")
+st.caption("Persistence • Competition • Shock • Decoherence • Sandy’s Law")
 
 # =====================================================
-# CONSTANTS (COGNITIVE CONSTRAINTS)
+# CONSTANTS (COGNITIVE + ENVIRONMENTAL)
 # =====================================================
 
 GRID_SIZE = 8
-MAX_CONCEPTS = 6              # cognitive capacity
-DECOHERENCE_THRESHOLD = 3     # persistence needed
-REPLACEMENT_THRESHOLD = 5     # must be stronger to replace
+MAX_CONCEPTS = 6
+DECOHERENCE_THRESHOLD = 3
+REPLACEMENT_THRESHOLD = 5
+
+SHOCK_PROBABILITY = 0.08      # chance per event
+SHOCK_MAGNITUDE = 0.6         # strength of disturbance
 
 # =====================================================
 # SESSION STATE (BIRTH)
@@ -45,6 +48,22 @@ def square_step(grid):
         for row in grid
     ]
 
+def apply_shock(grid):
+    # Non-local structural disturbance
+    cx = random.randint(0, GRID_SIZE - 1)
+    cy = random.randint(0, GRID_SIZE - 1)
+
+    for i in range(GRID_SIZE):
+        for j in range(GRID_SIZE):
+            dist = abs(i - cx) + abs(j - cy)
+            influence = max(0, SHOCK_MAGNITUDE - 0.15 * dist)
+            if influence > 0:
+                grid[i][j] = max(
+                    0,
+                    min(1, grid[i][j] + random.uniform(-influence, influence))
+                )
+    return grid
+
 def square_features(grid):
     flat = [v for r in grid for v in r]
     mean = sum(flat) / len(flat)
@@ -52,7 +71,7 @@ def square_features(grid):
     return mean, var
 
 # =====================================================
-# SANDY’S LAW TRAP (STRUCTURAL)
+# SANDY’S LAW TRAP
 # =====================================================
 
 def trap_state(mean, variance):
@@ -82,19 +101,15 @@ def update_patterns(signature, regime):
     if regime == "CLASSICAL":
         p["count"] += 1
 
-    # Attempt decoherence
     if p["count"] >= DECOHERENCE_THRESHOLD and not p["decohered"]:
 
-        # Capacity available
         if len(concepts) < MAX_CONCEPTS:
             p["decohered"] = True
             concepts.add(signature)
 
         else:
-            # Find weakest existing concept
             weakest = min(concepts, key=lambda c: patterns[c]["count"])
 
-            # Replace only if significantly stronger
             if p["count"] > patterns[weakest]["count"] + REPLACEMENT_THRESHOLD:
                 patterns[weakest]["decohered"] = False
                 concepts.remove(weakest)
@@ -103,26 +118,31 @@ def update_patterns(signature, regime):
                 concepts.add(signature)
 
 # =====================================================
-# EMOTION REGULATION (PHYSICAL, NOT SYMBOLIC)
+# EMOTION REGULATION (PHYSICAL)
 # =====================================================
 
-def update_emotion(regime):
+def update_emotion(regime, shocked):
     e = st.session_state.emotion
+
+    if shocked:
+        e["arousal"] = min(1.0, e["arousal"] + 0.25)
+        e["confidence"] = max(0.0, e["confidence"] - 0.25)
+        return
 
     if regime == "CLASSICAL":
         e["confidence"] = min(1.0, e["confidence"] + 0.03)
         e["arousal"] = max(0.0, e["arousal"] - 0.02)
 
     elif regime == "TRANSITION":
-        e["arousal"] = min(1.0, e["arousal"] + 0.05)
-        e["confidence"] = max(0.0, e["confidence"] - 0.03)
+        e["arousal"] = min(1.0, e["arousal"] + 0.06)
+        e["confidence"] = max(0.0, e["confidence"] - 0.05)
 
     elif regime == "ZENO":
-        e["arousal"] = min(1.0, e["arousal"] + 0.1)
-        e["confidence"] = max(0.0, e["confidence"] - 0.1)
+        e["arousal"] = min(1.0, e["arousal"] + 0.12)
+        e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
 # =====================================================
-# CHOICE ENGINE (CONSTRAINED)
+# CHOICE ENGINE
 # =====================================================
 
 def choose_action(regime):
@@ -143,17 +163,24 @@ def choose_action(regime):
 if st.button("▶ Advance Event"):
     st.session_state.event += 1
 
+    shocked = False
     st.session_state.square = square_step(st.session_state.square)
+
+    if random.random() < SHOCK_PROBABILITY:
+        st.session_state.square = apply_shock(st.session_state.square)
+        shocked = True
+
     mean, var = square_features(st.session_state.square)
     Z, sigma, K, regime = trap_state(mean, var)
 
     signature = f"{round(mean,2)}|{round(var,2)}"
     update_patterns(signature, regime)
-    update_emotion(regime)
+    update_emotion(regime, shocked)
     action = choose_action(regime)
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
+        "shock": shocked,
         "Z": round(Z, 3),
         "Σ": round(sigma, 3),
         "K": round(K, 3),
@@ -184,6 +211,7 @@ if st.session_state.ledger:
 
     st.write("**Regime:**", last["regime"])
     st.write("**Chosen Action:**", last["action"])
+    st.write("**Shock Event:**", "YES ⚡" if last["shock"] else "No")
 
 st.subheader("🧠 Active Concepts (Competitive)")
 for c in st.session_state.concepts:
