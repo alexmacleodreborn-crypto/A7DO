@@ -4,12 +4,12 @@ import copy
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE (SINGLE FILE)
-# Persistence → Competition → Shock → Decay → Curiosity → Choice
+# Embodiment + Sensing + Choice
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice")
+st.caption("Persistence • Competition • Shock • Decay • Curiosity • Choice • Body")
 
 # =====================================================
 # CONSTANTS
@@ -33,17 +33,30 @@ MIN_AROUSAL = 0.15
 
 if "event" not in st.session_state:
     st.session_state.event = 0
+
+    # Environment
     st.session_state.square = [
         [random.random() for _ in range(GRID_SIZE)]
         for _ in range(GRID_SIZE)
     ]
+
+    # Cognition
     st.session_state.patterns = {}
     st.session_state.concepts = set()
     st.session_state.ledger = []
+
+    # Emotion
     st.session_state.emotion = {
         "arousal": 0.4,
         "valence": 0.0,
         "confidence": 0.3,
+    }
+
+    # Body (Embodiment)
+    st.session_state.body = {
+        "x": 0.0,
+        "v": 0.0,
+        "energy": 1.0
     }
 
 # =====================================================
@@ -96,7 +109,7 @@ def trap_state(mean, variance):
     return Z, sigma, K, regime
 
 # =====================================================
-# DECAY
+# PATTERN DECAY (IRREVERSIBILITY)
 # =====================================================
 
 def decay_patterns():
@@ -118,27 +131,45 @@ def update_patterns(signature, regime):
         p["count"] += 1
 
     if p["count"] >= DECOHERENCE_THRESHOLD and not p["decohered"]:
-
         if len(concepts) < MAX_CONCEPTS:
             p["decohered"] = True
             concepts.add(signature)
-
         else:
             weakest = min(concepts, key=lambda c: patterns[c]["count"])
-
             if p["count"] > patterns[weakest]["count"] + REPLACEMENT_THRESHOLD:
                 patterns[weakest]["decohered"] = False
                 concepts.remove(weakest)
-
                 p["decohered"] = True
                 concepts.add(signature)
 
 # =====================================================
-# EMOTION (WITH CURIOSITY FLOOR)
+# BODY DYNAMICS (EMBODIMENT)
+# =====================================================
+
+def update_body(action):
+    b = st.session_state.body
+
+    if action == "EXPLORE":
+        b["v"] = min(1.0, b["v"] + 0.1)
+        b["energy"] = max(0.0, b["energy"] - 0.05)
+
+    elif action == "OBSERVE":
+        b["v"] = max(0.0, b["v"] - 0.05)
+        b["energy"] = min(1.0, b["energy"] + 0.03)
+
+    elif action == "HOLD":
+        b["v"] = 0.0
+        b["energy"] = min(1.0, b["energy"] + 0.01)
+
+    b["x"] += b["v"]
+
+# =====================================================
+# EMOTION REGULATION + PROPRIOCEPTION
 # =====================================================
 
 def update_emotion(regime, shocked):
     e = st.session_state.emotion
+    b = st.session_state.body
 
     if shocked:
         e["arousal"] = min(1.0, e["arousal"] + 0.25)
@@ -156,6 +187,11 @@ def update_emotion(regime, shocked):
         e["arousal"] = min(1.0, e["arousal"] + 0.12)
         e["confidence"] = max(0.0, e["confidence"] - 0.15)
 
+    # Proprioception (body → mind)
+    e["arousal"] = min(1.0, e["arousal"] + 0.1 * b["v"])
+    e["confidence"] = max(0.0, e["confidence"] - 0.2 * (1.0 - b["energy"]))
+
+    # Curiosity floor
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
@@ -214,6 +250,7 @@ if st.button("▶ Advance Event"):
     update_emotion(regime, shocked)
 
     action = choose_action(st.session_state.square)
+    update_body(action)
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
@@ -223,7 +260,8 @@ if st.button("▶ Advance Event"):
         "K": round(K, 3),
         "regime": regime,
         "pattern": signature,
-        "action": action
+        "action": action,
+        "body": dict(st.session_state.body)
     })
 
 # =====================================================
@@ -250,12 +288,15 @@ if st.session_state.ledger:
     st.write("**Chosen Action:**", last["action"])
     st.write("**Shock Event:**", "YES ⚡" if last["shock"] else "No")
 
-st.subheader("🧠 Active Concepts (Competitive)")
+st.subheader("🧠 Active Concepts")
 for c in st.session_state.concepts:
     st.write(c, "→ persistence:", round(st.session_state.patterns[c]["count"], 2))
 
 st.subheader("❤️ Emotion State")
 st.json(st.session_state.emotion)
+
+st.subheader("🧍 Body Awareness")
+st.json(st.session_state.body)
 
 with st.expander("📜 Ledger (Last 10 Events)"):
     for row in st.session_state.ledger[-10:]:
