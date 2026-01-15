@@ -244,4 +244,5 @@ st.subheader("❤️ Emotion State")
 st.json(st.session_state.emotion)
 
 with st.expander("📜 Ledger (Last 10 Events)"):
-    for row in
+    for row in st.session_state.ledger[-10:]:
+        st.write(row)
