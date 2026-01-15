@@ -6,12 +6,12 @@ import os
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE
-# Touch as experience • Objects • Persistent Memory
+# MAP MEMORY ENABLED
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Embodied • Remembering • Object-aware • Self-correcting")
+st.caption("Embodied • Remembering • Spatially aware")
 
 SAVE_FILE = "a7do_recall.json"
 
@@ -23,10 +23,11 @@ GRID_SIZE = 8
 WORLD_LIMIT = 20.0
 OBJECT_RADIUS = 1.5
 
+MAP_BIN_SIZE = 2.0   # 👈 spatial resolution
+TOUCH_PERSIST = 3
+
 MIN_AROUSAL = 0.15
 RECALL_ALPHA = 0.2
-
-TOUCH_PERSIST = 3   # 👈 touch lasts this many events
 
 # Appraisal weights
 W_K = 1.0
@@ -37,21 +38,30 @@ W_T = 0.6
 # SAVE / LOAD
 # =====================================================
 
-def load_recall():
+def load_memory():
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as f:
             return json.load(f)
-    return {}
+    return {"recall": {}, "map": {}}
 
-def save_recall():
+def save_memory():
     with open(SAVE_FILE, "w") as f:
-        json.dump(st.session_state.recall, f, indent=2)
+        json.dump(
+            {
+                "recall": st.session_state.recall,
+                "map": st.session_state.map_memory,
+            },
+            f,
+            indent=2,
+        )
 
 # =====================================================
 # INIT
 # =====================================================
 
 def init_state():
+    mem = load_memory()
+
     st.session_state.event = 0
 
     st.session_state.square = [
@@ -72,7 +82,7 @@ def init_state():
         "dir": random.choice([-1, 1]),
         "energy": 1.0,
         "touch": False,
-        "touch_timer": 0,   # 👈 latch
+        "touch_timer": 0,
     }
 
     st.session_state.objects = [
@@ -86,7 +96,8 @@ def init_state():
         "distance": None,
     }
 
-    st.session_state.recall = load_recall()
+    st.session_state.recall = mem["recall"]
+    st.session_state.map_memory = mem["map"]
     st.session_state.ledger = []
 
 if "event" not in st.session_state:
@@ -101,6 +112,9 @@ def clamp(x, lo=0.0, hi=1.0):
 
 def ema(old, new, a=RECALL_ALPHA):
     return (1 - a) * old + a * new
+
+def map_bin(x):
+    return str(int(x // MAP_BIN_SIZE) * MAP_BIN_SIZE)
 
 # =====================================================
 # WORLD
@@ -119,7 +133,7 @@ def square_features(grid):
     return mean, var
 
 # =====================================================
-# BODY
+# BODY & TOUCH
 # =====================================================
 
 def update_body(action):
@@ -134,10 +148,6 @@ def update_body(action):
         b["energy"] = min(1.0, b["energy"] + 0.08)
 
     b["x"] += b["v"] * b["dir"]
-
-# =====================================================
-# TOUCH (LATCHEd EXPERIENCE)
-# =====================================================
 
 def update_touch():
     b = st.session_state.body
@@ -159,7 +169,7 @@ def update_touch():
         b["touch"] = False
 
 # =====================================================
-# VISION (AFTER MOVEMENT)
+# VISION
 # =====================================================
 
 def update_vision():
@@ -214,6 +224,29 @@ def apply_object_effects():
     return 0.0
 
 # =====================================================
+# MAP MEMORY
+# =====================================================
+
+def update_map(valence, energy_delta):
+    b = st.session_state.body
+    key = map_bin(b["x"])
+
+    if key not in st.session_state.map_memory:
+        st.session_state.map_memory[key] = {
+            "visits": 0,
+            "avg_valence": 0.0,
+            "touches": 0,
+            "avg_energy_delta": 0.0,
+        }
+
+    cell = st.session_state.map_memory[key]
+    cell["visits"] += 1
+    cell["avg_valence"] = ema(cell["avg_valence"], valence)
+    cell["avg_energy_delta"] = ema(cell["avg_energy_delta"], energy_delta)
+    if b["touch"]:
+        cell["touches"] += 1
+
+# =====================================================
 # RECALL
 # =====================================================
 
@@ -230,7 +263,6 @@ def appraisal(sig, K, energy_delta, touch):
     r = recall_get(sig)
     dK = r["expected_K"] - K
     t = 1.0 if touch else 0.0
-
     raw = W_K * dK + W_E * energy_delta - W_T * t
     return max(-1.0, min(1.0, raw * 2))
 
@@ -252,15 +284,21 @@ def update_emotion(val):
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
-# CHOICE
+# CHOICE (MAP-INFORMED)
 # =====================================================
 
 def choose_action():
     b = st.session_state.body
     v = st.session_state.vision
+    current_bin = map_bin(b["x"])
+    cell = st.session_state.map_memory.get(current_bin)
 
     if b["energy"] < 0.4:
         return "REST"
+
+    if cell and cell["avg_valence"] < -0.2:
+        b["dir"] *= -1
+        return "MOVE"
 
     if v["object"]:
         if v["object"]["type"] == "resource":
@@ -284,7 +322,7 @@ with c2:
         st.experimental_rerun()
 
 # =====================================================
-# EVENT LOOP (CORRECT CAUSAL ORDER)
+# EVENT LOOP
 # =====================================================
 
 if step:
@@ -307,19 +345,18 @@ if step:
 
     val = appraisal(sig, K, energy_delta, st.session_state.body["touch"])
     recall_update(sig, K, val)
+    update_map(val, energy_delta)
     update_emotion(val)
 
-    save_recall()
+    save_memory()
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
         "x": round(st.session_state.body["x"], 2),
+        "bin": map_bin(st.session_state.body["x"]),
         "energy": round(st.session_state.body["energy"], 2),
         "touch": st.session_state.body["touch"],
-        "touch_timer": st.session_state.body["touch_timer"],
-        "vision_object": st.session_state.vision["object"],
-        "distance": st.session_state.vision["distance"],
-        "action": action,
+        "object": st.session_state.vision["object"],
         "valence": round(val, 2),
     })
 
@@ -336,12 +373,8 @@ st.json(st.session_state.vision)
 st.subheader("❤️ Emotion")
 st.json(st.session_state.emotion)
 
-st.subheader("🌍 Objects")
-for o in st.session_state.objects:
-    st.write(o)
-
-st.subheader("🧠 Recall (Persistent)")
-for k, v in list(st.session_state.recall.items())[:5]:
+st.subheader("🗺️ MAP Memory")
+for k, v in st.session_state.map_memory.items():
     st.write(k, v)
 
 with st.expander("📜 Ledger (Last 10)"):
