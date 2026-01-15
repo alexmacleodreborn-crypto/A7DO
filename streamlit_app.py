@@ -6,7 +6,7 @@ import os
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE
-# MAP MEMORY ENABLED
+# MAP memory + edge-triggered touch
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
@@ -22,26 +22,35 @@ SAVE_FILE = "a7do_recall.json"
 GRID_SIZE = 8
 WORLD_LIMIT = 20.0
 OBJECT_RADIUS = 1.5
+MAP_BIN_SIZE = 2.0
 
-MAP_BIN_SIZE = 2.0   # 👈 spatial resolution
 TOUCH_PERSIST = 3
-
 MIN_AROUSAL = 0.15
 RECALL_ALPHA = 0.2
 
-# Appraisal weights
+# appraisal weights
 W_K = 1.0
 W_E = 0.4
 W_T = 0.6
 
 # =====================================================
-# SAVE / LOAD
+# SAVE / LOAD (BACKWARD COMPATIBLE)
 # =====================================================
 
 def load_memory():
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+
+            # backward compatibility
+            if "recall" not in data:
+                return {"recall": data, "map": {}}
+
+            if "map" not in data:
+                data["map"] = {}
+
+            return data
+
     return {"recall": {}, "map": {}}
 
 def save_memory():
@@ -83,6 +92,7 @@ def init_state():
         "energy": 1.0,
         "touch": False,
         "touch_timer": 0,
+        "was_touching": False,   # 👈 EDGE STATE
     }
 
     st.session_state.objects = [
@@ -133,7 +143,7 @@ def square_features(grid):
     return mean, var
 
 # =====================================================
-# BODY & TOUCH
+# BODY
 # =====================================================
 
 def update_body(action):
@@ -149,24 +159,36 @@ def update_body(action):
 
     b["x"] += b["v"] * b["dir"]
 
+# =====================================================
+# TOUCH — EDGE TRIGGERED + LATCHED
+# =====================================================
+
 def update_touch():
     b = st.session_state.body
+    touching_now = False
 
     if b["x"] <= 0:
         b["x"] = 0
         b["dir"] = 1
-        b["touch_timer"] = TOUCH_PERSIST
+        touching_now = True
 
     elif b["x"] >= WORLD_LIMIT:
         b["x"] = WORLD_LIMIT
         b["dir"] = -1
+        touching_now = True
+
+    # edge trigger
+    if touching_now and not b["was_touching"]:
         b["touch_timer"] = TOUCH_PERSIST
 
+    # latch + decay
     if b["touch_timer"] > 0:
         b["touch"] = True
         b["touch_timer"] -= 1
     else:
         b["touch"] = False
+
+    b["was_touching"] = touching_now
 
 # =====================================================
 # VISION
@@ -284,14 +306,13 @@ def update_emotion(val):
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
-# CHOICE (MAP-INFORMED)
+# CHOICE (MAP AWARE)
 # =====================================================
 
 def choose_action():
     b = st.session_state.body
     v = st.session_state.vision
-    current_bin = map_bin(b["x"])
-    cell = st.session_state.map_memory.get(current_bin)
+    cell = st.session_state.map_memory.get(map_bin(b["x"]))
 
     if b["energy"] < 0.4:
         return "REST"
@@ -354,8 +375,9 @@ if step:
         "event": st.session_state.event,
         "x": round(st.session_state.body["x"], 2),
         "bin": map_bin(st.session_state.body["x"]),
-        "energy": round(st.session_state.body["energy"], 2),
         "touch": st.session_state.body["touch"],
+        "touch_timer": st.session_state.body["touch_timer"],
+        "energy": round(st.session_state.body["energy"], 2),
         "object": st.session_state.vision["object"],
         "valence": round(val, 2),
     })
