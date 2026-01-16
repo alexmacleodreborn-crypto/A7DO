@@ -6,12 +6,12 @@ import os
 
 # =====================================================
 # A7DO — BORN INTELLIGENCE
-# MAP memory + edge-triggered touch
+# MAP memory + edge-triggered touch + ATTENTION (vision persistence)
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Embodied • Remembering • Spatially aware")
+st.caption("Embodied • Remembering • Spatially aware • Attentive")
 
 SAVE_FILE = "a7do_recall.json"
 
@@ -25,6 +25,8 @@ OBJECT_RADIUS = 1.5
 MAP_BIN_SIZE = 2.0
 
 TOUCH_PERSIST = 3
+ATTENTION_PERSIST = 6   # 👈 how long last-seen object stays “in mind”
+
 MIN_AROUSAL = 0.15
 RECALL_ALPHA = 0.2
 
@@ -42,7 +44,7 @@ def load_memory():
         with open(SAVE_FILE, "r") as f:
             data = json.load(f)
 
-            # backward compatibility
+            # backward compatibility for older saves
             if "recall" not in data:
                 return {"recall": data, "map": {}}
 
@@ -92,7 +94,7 @@ def init_state():
         "energy": 1.0,
         "touch": False,
         "touch_timer": 0,
-        "was_touching": False,   # 👈 EDGE STATE
+        "was_touching": False,
     }
 
     st.session_state.objects = [
@@ -100,10 +102,16 @@ def init_state():
         {"type": "hazard", "x": 14.0, "strength": 0.5},
     ]
 
+    # Vision + Attention
     st.session_state.vision = {
         "motion": 0.0,
         "object": None,
         "distance": None,
+
+        # 👇 ATTENTION STATE (persists after object leaves view)
+        "attention_object": None,
+        "attention_distance": None,
+        "attention_timer": 0,
     }
 
     st.session_state.recall = mem["recall"]
@@ -177,11 +185,9 @@ def update_touch():
         b["dir"] = -1
         touching_now = True
 
-    # edge trigger
     if touching_now and not b["was_touching"]:
         b["touch_timer"] = TOUCH_PERSIST
 
-    # latch + decay
     if b["touch_timer"] > 0:
         b["touch"] = True
         b["touch_timer"] -= 1
@@ -191,20 +197,23 @@ def update_touch():
     b["was_touching"] = touching_now
 
 # =====================================================
-# VISION
+# VISION + ATTENTION
 # =====================================================
 
-def update_vision():
+def update_vision_and_attention():
+    v = st.session_state.vision
+
+    # grid motion (novelty proxy)
     prev = st.session_state.prev_square
     curr = st.session_state.square
-
     delta = sum(
         abs(curr[i][j] - prev[i][j])
         for i in range(GRID_SIZE)
         for j in range(GRID_SIZE)
     )
-    st.session_state.vision["motion"] = delta / (GRID_SIZE ** 2)
+    v["motion"] = delta / (GRID_SIZE ** 2)
 
+    # object sensing
     b = st.session_state.body
     nearest = None
     nearest_dist = float("inf")
@@ -216,16 +225,29 @@ def update_vision():
             nearest_dist = d
 
     if nearest_dist <= OBJECT_RADIUS:
-        st.session_state.vision["object"] = nearest
-        st.session_state.vision["distance"] = round(nearest_dist, 2)
+        v["object"] = nearest
+        v["distance"] = round(nearest_dist, 2)
+
+        # 👇 ATTENTION REFRESH (edge: seen again)
+        v["attention_object"] = nearest
+        v["attention_distance"] = round(nearest_dist, 2)
+        v["attention_timer"] = ATTENTION_PERSIST
+
     else:
-        st.session_state.vision["object"] = None
-        st.session_state.vision["distance"] = None
+        v["object"] = None
+        v["distance"] = None
+
+        # 👇 ATTENTION DECAY
+        if v["attention_timer"] > 0:
+            v["attention_timer"] -= 1
+        else:
+            v["attention_object"] = None
+            v["attention_distance"] = None
 
     st.session_state.prev_square = copy.deepcopy(curr)
 
 # =====================================================
-# OBJECT EFFECTS
+# OBJECT EFFECTS (only when actually in contact range)
 # =====================================================
 
 def apply_object_effects():
@@ -306,25 +328,36 @@ def update_emotion(val):
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
 # =====================================================
-# CHOICE (MAP AWARE)
+# CHOICE (MAP + ATTENTION)
 # =====================================================
 
 def choose_action():
     b = st.session_state.body
     v = st.session_state.vision
-    cell = st.session_state.map_memory.get(map_bin(b["x"]))
 
+    # basic survival
     if b["energy"] < 0.4:
         return "REST"
 
+    # MAP avoidance
+    cell = st.session_state.map_memory.get(map_bin(b["x"]))
     if cell and cell["avg_valence"] < -0.2:
         b["dir"] *= -1
         return "MOVE"
 
+    # Immediate perception
     if v["object"]:
         if v["object"]["type"] == "resource":
             return "MOVE"
         if v["object"]["type"] == "hazard":
+            b["dir"] *= -1
+            return "MOVE"
+
+    # 👇 ATTENTION: pursue/avoid remembered object even if not currently visible
+    if v["attention_object"]:
+        if v["attention_object"]["type"] == "resource":
+            return "MOVE"
+        if v["attention_object"]["type"] == "hazard":
             b["dir"] *= -1
             return "MOVE"
 
@@ -358,7 +391,7 @@ if step:
     action = choose_action()
     update_body(action)
     update_touch()
-    update_vision()
+    update_vision_and_attention()
 
     energy_before = st.session_state.body["energy"]
     apply_object_effects()
@@ -378,8 +411,11 @@ if step:
         "touch": st.session_state.body["touch"],
         "touch_timer": st.session_state.body["touch_timer"],
         "energy": round(st.session_state.body["energy"], 2),
-        "object": st.session_state.vision["object"],
+        "seen_object": st.session_state.vision["object"],
+        "attn_object": st.session_state.vision["attention_object"],
+        "attn_timer": st.session_state.vision["attention_timer"],
         "valence": round(val, 2),
+        "action": action,
     })
 
 # =====================================================
@@ -389,7 +425,7 @@ if step:
 st.subheader("🧍 Body")
 st.json(st.session_state.body)
 
-st.subheader("👁️ Vision")
+st.subheader("👁️ Vision + Attention")
 st.json(st.session_state.vision)
 
 st.subheader("❤️ Emotion")
