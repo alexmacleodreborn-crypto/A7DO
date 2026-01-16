@@ -1,204 +1,136 @@
 import streamlit as st
-import random
 import math
-import json
-import os
+import random
 
 # =====================================================
-# A7DO — Scene-Based World with Planning
+# A7DO — MAP / BODY / SCENE / OBJECT
 # =====================================================
 
-st.set_page_config(page_title="A7DO", layout="wide")
-st.title("🧠 A7DO — Scene World")
-st.caption("Embodied • Scene-aware • Planning")
-
-SAVE_FILE = "a7do_memory.json"
-
-# =====================================================
-# WORLD CONSTANTS
-# =====================================================
+st.set_page_config(layout="wide")
+st.title("🧠 A7DO — Embodied World")
 
 WORLD_SIZE = 20.0
-TOUCH_PERSIST = 3
-INVESTIGATE_PERSIST = 4
-
-DAY_LENGTH = 200  # events per full cycle
-RAIN_CHANCE = 0.02
-
-# =====================================================
-# UTIL
-# =====================================================
-
-def clamp(x, lo=0.0, hi=1.0):
-    return max(lo, min(hi, x))
-
-def load_memory():
-    if os.path.exists(SAVE_FILE):
-        with open(SAVE_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_memory(mem):
-    with open(SAVE_FILE, "w") as f:
-        json.dump(mem, f, indent=2)
+CELL_SIZE = 4.0
+BALL_RADIUS = 0.6
 
 # =====================================================
 # INIT
 # =====================================================
 
-def init_state():
+def init():
     st.session_state.event = 0
 
+    # BODY
     st.session_state.body = {
-        "x": random.uniform(3, WORLD_SIZE-3),
-        "y": random.uniform(3, WORLD_SIZE-3),
-        "vx": 0.3,
-        "vy": 0.2,
+        "x": 5.0,
+        "y": 5.0,
+        "vx": 0.4,
+        "vy": 0.3,
         "energy": 1.0,
         "touch": False,
-        "investigating": False,
-        "investigate_timer": 0,
+        "walking": True,
     }
 
-    st.session_state.gps = {"x": 0.0, "y": 0.0}
+    # MAP (cells)
+    st.session_state.map = {}
 
-    st.session_state.weather = {
-        "rain": False,
-        "wind": random.uniform(-0.05, 0.05),
-    }
-
-    st.session_state.scene = {
-        "light": 0.0,
-        "sound": [],
-        "visuals": [],
-    }
-
-    # red spherical thing
+    # BALL (reactive object)
     st.session_state.ball = {
-        "x": WORLD_SIZE/2 + 2,
-        "y": WORLD_SIZE/2 - 1,
-        "radius": 0.8,
+        "x": 10.0,
+        "y": 10.0,
+        "vx": 0.0,
+        "vy": 0.0,
     }
 
-    st.session_state.memory = load_memory()
+    st.session_state.scene = {}
     st.session_state.log = []
 
 if "event" not in st.session_state:
-    init_state()
+    init()
 
 # =====================================================
-# TIME / SKY
+# MAP
 # =====================================================
 
-def sky_state():
-    phase = (st.session_state.event % DAY_LENGTH) / DAY_LENGTH
-    if phase < 0.25:
-        return "sunrise"
-    elif phase < 0.5:
-        return "day"
-    elif phase < 0.75:
-        return "sunset"
-    else:
-        return "night"
+def map_cell(x, y):
+    cx = int(x // CELL_SIZE)
+    cy = int(y // CELL_SIZE)
+    return f"{cx},{cy}"
+
+def update_map(cell, scene):
+    m = st.session_state.map.setdefault(cell, {
+        "visits": 0,
+        "touches": 0,
+        "sounds": [],
+    })
+    m["visits"] += 1
+    m["sounds"].extend(scene["sound"])
 
 # =====================================================
-# WEATHER
+# BODY MOVEMENT
 # =====================================================
 
-def update_weather():
-    if random.random() < RAIN_CHANCE:
-        st.session_state.weather["rain"] = True
-    if st.session_state.weather["rain"] and random.random() < 0.05:
-        st.session_state.weather["rain"] = False
-
-# =====================================================
-# SCENE PERCEPTION
-# =====================================================
-
-def perceive_scene():
-    body = st.session_state.body
-    scene = {"sound": [], "visuals": []}
-
-    sky = sky_state()
-
-    # light
-    if sky in ["day", "sunrise", "sunset"]:
-        scene["light"] = 0.8
-    else:
-        scene["light"] = 0.3
-
-    # sky sounds
-    if sky == "sunrise":
-        scene["sound"].append("soft chirping")
-    if sky == "night":
-        scene["sound"].append("distant howling")
-        scene["visuals"].append("stars scattered")
-
-    # rain
-    if st.session_state.weather["rain"]:
-        scene["sound"].append("water falling")
-        scene["visuals"].append("moving droplets")
-
-    # rainbow after rain
-    if not st.session_state.weather["rain"] and sky == "day":
-        scene["visuals"].append("faint colour arc")
-
-    # ball perception
-    dx = body["x"] - st.session_state.ball["x"]
-    dy = body["y"] - st.session_state.ball["y"]
-    d = math.sqrt(dx*dx + dy*dy)
-    if d < 2.0:
-        scene["visuals"].append("round red-shifted shape")
-
-    st.session_state.scene = scene
-
-# =====================================================
-# TOUCH & INVESTIGATION
-# =====================================================
-
-def resolve_touch():
+def move_body():
     b = st.session_state.body
-    touched = False
+    b["x"] += b["vx"]
+    b["y"] += b["vy"]
 
+    # wall collisions
     if b["x"] <= 0 or b["x"] >= WORLD_SIZE:
         b["vx"] *= -1
-        touched = True
+        b["touch"] = True
     if b["y"] <= 0 or b["y"] >= WORLD_SIZE:
         b["vy"] *= -1
-        touched = True
-
-    if touched:
         b["touch"] = True
-        b["investigating"] = True
-        b["investigate_timer"] = INVESTIGATE_PERSIST
-    else:
-        b["touch"] = False
-
-    if b["investigating"]:
-        b["investigate_timer"] -= 1
-        if b["investigate_timer"] <= 0:
-            b["investigating"] = False
 
 # =====================================================
-# PLAN (short horizon)
+# OBJECT PHYSICS (BALL)
 # =====================================================
 
-def plan():
-    b = st.session_state.body
-    # predict next step
-    nx = b["x"] + b["vx"]
-    ny = b["y"] + b["vy"]
+def update_ball():
+    ball = st.session_state.ball
+    body = st.session_state.body
 
-    # anticipate collision
-    if nx <= 0 or nx >= WORLD_SIZE:
-        b["vx"] *= -0.5
-    if ny <= 0 or ny >= WORLD_SIZE:
-        b["vy"] *= -0.5
+    # distance body → ball
+    dx = body["x"] - ball["x"]
+    dy = body["y"] - ball["y"]
+    d = math.sqrt(dx*dx + dy*dy)
 
-    # slow if investigating
-    if b["investigating"]:
-        b["vx"] *= 0.5
-        b["vy"] *= 0.5
+    if d < BALL_RADIUS:
+        # TOUCH BALL → it rolls
+        ball["vx"] = -dx * 0.3
+        ball["vy"] = -dy * 0.3
+        body["touch"] = True
+
+    # apply ball motion
+    ball["x"] += ball["vx"]
+    ball["y"] += ball["vy"]
+
+    # friction
+    ball["vx"] *= 0.85
+    ball["vy"] *= 0.85
+
+# =====================================================
+# SCENE (derived, not stored)
+# =====================================================
+
+def build_scene():
+    body = st.session_state.body
+    scene = {"sound": [], "visual": []}
+
+    # walking sound
+    speed = math.sqrt(body["vx"]**2 + body["vy"]**2)
+    if speed > 0.05:
+        scene["sound"].append("footsteps")
+
+    # touch sound
+    if body["touch"]:
+        scene["sound"].append("thud")
+
+    # ball visual
+    scene["visual"].append("red spherical shape")
+
+    st.session_state.scene = scene
 
 # =====================================================
 # STEP
@@ -206,47 +138,46 @@ def plan():
 
 def step():
     st.session_state.event += 1
+    st.session_state.body["touch"] = False
 
-    update_weather()
-    plan()
+    move_body()
+    update_ball()
+    build_scene()
 
-    b = st.session_state.body
-    b["x"] += b["vx"] + st.session_state.weather["wind"]
-    b["y"] += b["vy"]
-
-    resolve_touch()
-    perceive_scene()
-
-    st.session_state.gps["x"] = round(b["x"], 2)
-    st.session_state.gps["y"] = round(b["y"], 2)
+    cell = map_cell(st.session_state.body["x"], st.session_state.body["y"])
+    update_map(cell, st.session_state.scene)
 
     st.session_state.log.append({
         "event": st.session_state.event,
-        "gps": st.session_state.gps,
-        "touch": b["touch"],
-        "investigating": b["investigating"],
+        "pos": (round(st.session_state.body["x"],2),
+                round(st.session_state.body["y"],2)),
+        "touch": st.session_state.body["touch"],
         "scene": st.session_state.scene,
     })
-
-    save_memory(st.session_state.memory)
 
 # =====================================================
 # UI
 # =====================================================
 
-if st.button("▶ Advance"):
+if st.button("▶ Step"):
     step()
 
 if st.toggle("Auto"):
     for _ in range(10):
         step()
 
-st.subheader("🧭 GPS")
-st.json(st.session_state.gps)
+st.subheader("🧍 Body")
+st.json(st.session_state.body)
 
-st.subheader("🌍 Scene")
+st.subheader("🔴 Ball")
+st.json(st.session_state.ball)
+
+st.subheader("🌍 Scene (Now)")
 st.json(st.session_state.scene)
 
+st.subheader("🗺 Map Cells")
+st.json(st.session_state.map)
+
 with st.expander("📜 Log"):
-    for row in st.session_state.log[-15:]:
+    for row in st.session_state.log[-10:]:
         st.write(row)
