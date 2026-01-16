@@ -3,11 +3,11 @@ import math
 import random
 
 # =====================================================
-# A7DO — Embodied World (Improved Motion, FIXED)
+# A7DO — Embodied World with Body Parts (Birth Phase)
 # =====================================================
 
 st.set_page_config(layout="wide")
-st.title("🧠 A7DO — Embodied World")
+st.title("🧠 A7DO — Embodied World (Body Parts)")
 
 WORLD_SIZE = 20.0
 CELL_SIZE = 4.0
@@ -20,11 +20,14 @@ BODY_SPEED = 0.4
 BODY_HEIGHT_BASE = 0.5
 
 # =====================================================
-# HELPERS (FIXED LOCATION)
+# HELPERS
 # =====================================================
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
+
+def dist(a, b):
+    return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
 
 # =====================================================
 # INIT
@@ -33,29 +36,33 @@ def clamp(x, lo, hi):
 def init():
     st.session_state.event = 0
 
-    # BODY (A7DO)
+    # BODY CORE
     st.session_state.body = {
         "x": 5.0,
         "y": 5.0,
         "z": BODY_HEIGHT_BASE,
         "vx": BODY_SPEED,
         "vy": BODY_SPEED * 0.8,
-        "energy": 1.0,
         "touch": False,
-        "walking": True,
+        "touch_regions": [],
+    }
+
+    # BODY CONTACT REGIONS (relative, unnamed internally)
+    st.session_state.body_parts = {
+        "front":  {"dx": 0.6,  "dy": 0.0,  "r": 0.35, "impact": 1.0},
+        "left":   {"dx": 0.0,  "dy": 0.6,  "r": 0.35, "impact": 0.6},
+        "right":  {"dx": 0.0,  "dy": -0.6, "r": 0.35, "impact": 0.6},
+        "upper":  {"dx": 0.0,  "dy": 0.0,  "r": 0.25, "impact": 1.4},
+        "lower":  {"dx": 0.0,  "dy": 0.0,  "r": 0.45, "impact": 0.3},
     }
 
     # GPS (felt position)
-    st.session_state.gps = {
-        "x": 0.0,
-        "y": 0.0,
-        "z": BODY_HEIGHT_BASE,
-    }
+    st.session_state.gps = {"x": 0.0, "y": 0.0, "z": BODY_HEIGHT_BASE}
 
     # MAP
     st.session_state.map = {}
 
-    # BALL (reactive object)
+    # BALL
     st.session_state.ball = {
         "x": 10.0,
         "y": 10.0,
@@ -108,62 +115,63 @@ def move_body():
 
     b["touch"] = touched
 
-    # vertical vibration from motion (felt height)
     speed = math.sqrt(b["vx"]**2 + b["vy"]**2)
     b["z"] = BODY_HEIGHT_BASE + clamp(speed * 0.2, 0, 0.5)
 
 # =====================================================
-# BALL PHYSICS
+# BALL + BODY PART CONTACT
 # =====================================================
 
-def update_ball():
+def update_ball_and_contacts():
     ball = st.session_state.ball
     body = st.session_state.body
+    body["touch_regions"] = []
 
-    dx = ball["x"] - body["x"]
-    dy = ball["y"] - body["y"]
-    dist = math.sqrt(dx*dx + dy*dy)
+    for part_name, part in st.session_state.body_parts.items():
+        px = body["x"] + part["dx"]
+        py = body["y"] + part["dy"]
 
-    # TOUCH BALL (proximity-based)
-    if dist < BALL_RADIUS:
-        norm = max(dist, 0.01)
-        ball["vx"] = (dx / norm) * 0.6
-        ball["vy"] = (dy / norm) * 0.6
-        ball["moving"] = True
-        body["touch"] = True
+        d = dist((px, py), (ball["x"], ball["y"]))
 
-        # impact vibration
-        body["z"] += 0.3
+        if d < part["r"] + BALL_RADIUS:
+            body["touch"] = True
+            body["touch_regions"].append(part_name)
 
-    # move ball
+            # impulse direction
+            dx = ball["x"] - px
+            dy = ball["y"] - py
+            norm = max(math.sqrt(dx*dx + dy*dy), 0.01)
+
+            strength = part["impact"]
+            ball["vx"] += (dx / norm) * 0.6 * strength
+            ball["vy"] += (dy / norm) * 0.6 * strength
+            ball["moving"] = True
+
+            # vibration
+            body["z"] += 0.2 * strength
+
     if ball["moving"]:
         ball["x"] += ball["vx"]
         ball["y"] += ball["vy"]
 
-        # wall rebound
         if ball["x"] <= 0 or ball["x"] >= WORLD_SIZE:
             ball["vx"] *= -BALL_REBOUND
         if ball["y"] <= 0 or ball["y"] >= WORLD_SIZE:
             ball["vy"] *= -BALL_REBOUND
 
-        # friction
         ball["vx"] *= BALL_FRICTION
         ball["vy"] *= BALL_FRICTION
 
-        # stop if slow
         if abs(ball["vx"]) < 0.02 and abs(ball["vy"]) < 0.02:
-            ball["vx"] = 0.0
-            ball["vy"] = 0.0
+            ball["vx"] = ball["vy"] = 0.0
             ball["moving"] = False
 
 # =====================================================
-# SCENE
+# SCENE (STILL MINIMAL)
 # =====================================================
 
 def build_scene():
     body = st.session_state.body
-    ball = st.session_state.ball
-
     scene = {"sound": [], "visual": []}
 
     speed = math.sqrt(body["vx"]**2 + body["vy"]**2)
@@ -173,10 +181,8 @@ def build_scene():
     if body["touch"]:
         scene["sound"].append("thud")
 
-    dx = body["x"] - ball["x"]
-    dy = body["y"] - ball["y"]
-    if math.sqrt(dx*dx + dy*dy) < 2.0:
-        scene["visual"].append("round red-shifted shape")
+    if body["touch_regions"]:
+        scene["visual"].append("nearby rounded resistance")
 
     st.session_state.scene = scene
 
@@ -189,10 +195,9 @@ def step():
     st.session_state.body["touch"] = False
 
     move_body()
-    update_ball()
+    update_ball_and_contacts()
     build_scene()
 
-    # GPS update
     b = st.session_state.body
     st.session_state.gps["x"] = round(b["x"], 2)
     st.session_state.gps["y"] = round(b["y"], 2)
@@ -205,6 +210,7 @@ def step():
         "event": st.session_state.event,
         "gps": st.session_state.gps.copy(),
         "touch": b["touch"],
+        "regions": b["touch_regions"].copy(),
         "scene": st.session_state.scene,
     })
 
@@ -219,7 +225,7 @@ if st.toggle("Auto"):
     for _ in range(10):
         step()
 
-st.subheader("🧭 GPS (felt position)")
+st.subheader("🧭 GPS")
 st.json(st.session_state.gps)
 
 st.subheader("🧍 Body")
