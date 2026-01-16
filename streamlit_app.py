@@ -6,12 +6,15 @@ import math
 
 # =====================================================
 # A7DO — Born Intelligence
-# VERIFIED TOUCH VERSION
+# Touch ✓  Investigation ✓
+# Footsteps only when moving
+# Constant heartbeat
+# Moving light window (sun / moon)
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Touch → Investigate → Learn")
+st.caption("Embodied • Curious • Temporal • Environmental")
 
 SAVE_FILE = "a7do_memory.json"
 
@@ -24,23 +27,27 @@ MAP_BIN_SIZE = 2.0
 
 TOUCH_PERSIST = 3
 INVESTIGATE_PERSIST = 4
-
 ATTENTION_PERSIST = 6
 
 RECALL_ALPHA = 0.2
 MIN_AROUSAL = 0.15
 
+# motion
 MIN_MOVE_V = 0.25
 MOVE_ACCEL = 0.12
 MOVE_COST = 0.04
 REST_GAIN = 0.07
 
-GRAD_EPS = 0.35
-
+# sound
 BASE_HEART = 0.8
-HEART_AROUSAL_GAIN = 1.6
+HEART_AROUSAL_GAIN = 0.6
 FOOTSTEP_GAIN = 1.2
 DISRUPTION_GAIN = 1.0
+
+# light window (sun / moon)
+LIGHT_WINDOW_RADIUS = 3.0
+LIGHT_WINDOW_STRENGTH = 0.7
+DAY_CYCLE = 120  # events per full sweep
 
 # =====================================================
 # UTIL
@@ -98,18 +105,16 @@ def init_state():
         "v": 0.0,
         "dir": random.choice([-1, 1]),
         "energy": 1.0,
-
         "touch": False,
         "touch_timer": 0,
         "was_touching": False,
-
         "investigating": False,
         "investigate_timer": 0,
     }
 
     st.session_state.vision = {
         "dark": 0.0,
-        "grad": 0.0,
+        "light": 0.0,
         "attn_timer": 0,
     }
 
@@ -129,7 +134,22 @@ if "event" not in st.session_state:
     init_state()
 
 # =====================================================
-# TOUCH — ONLY PLACE BOUNDARIES EXIST
+# LIGHT WINDOW (SUN / MOON)
+# =====================================================
+
+def light_window_position():
+    phase = (st.session_state.event % DAY_CYCLE) / DAY_CYCLE
+    return WORLD_LIMIT * phase
+
+def light_window(x):
+    center = light_window_position()
+    dx = abs(x - center)
+    if dx > LIGHT_WINDOW_RADIUS:
+        return 0.0
+    return LIGHT_WINDOW_STRENGTH * math.exp(-(dx / LIGHT_WINDOW_RADIUS) ** 2)
+
+# =====================================================
+# TOUCH → INVESTIGATION
 # =====================================================
 
 def update_touch():
@@ -140,7 +160,6 @@ def update_touch():
         b["x"] = 0
         b["dir"] = 1
         touching = True
-
     elif b["x"] >= WORLD_LIMIT:
         b["x"] = WORLD_LIMIT
         b["dir"] = -1
@@ -165,7 +184,7 @@ def update_touch():
     b["was_touching"] = touching
 
 # =====================================================
-# BODY — NO CLAMPING
+# BODY (NO CLAMPING)
 # =====================================================
 
 def update_body(action):
@@ -177,12 +196,23 @@ def update_body(action):
     if action == "MOVE":
         b["v"] = min(1.0, max(MIN_MOVE_V, b["v"] + MOVE_ACCEL))
         b["energy"] = max(0.0, b["energy"] - MOVE_COST)
-
     elif action == "REST":
         b["v"] = 0.0
         b["energy"] = min(1.0, b["energy"] + REST_GAIN)
 
     b["x"] += b["v"] * b["dir"]
+
+# =====================================================
+# VISION (LIGHT FIELD)
+# =====================================================
+
+def update_vision():
+    b = st.session_state.body
+    light = light_window(b["x"])
+    dark = 1.0 - light
+
+    st.session_state.vision["light"] = round(light, 3)
+    st.session_state.vision["dark"] = round(dark, 3)
 
 # =====================================================
 # SOUND
@@ -193,12 +223,17 @@ def update_sound():
     e = st.session_state.emotion
     s = st.session_state.sound
 
+    # Heartbeat ALWAYS present
     heart = BASE_HEART + HEART_AROUSAL_GAIN * e["arousal"]
 
-    if b["investigating"]:
-        foot = FOOTSTEP_GAIN * abs(b["v"]) * random.uniform(0.3, 0.7)
+    # Footsteps ONLY if moving
+    if b["v"] > 0:
+        if b["investigating"]:
+            foot = FOOTSTEP_GAIN * b["v"] * random.uniform(0.3, 0.7)
+        else:
+            foot = FOOTSTEP_GAIN * b["v"]
     else:
-        foot = FOOTSTEP_GAIN * abs(b["v"])
+        foot = 0.0
 
     rhythm = heart + foot
 
@@ -231,35 +266,33 @@ def choose_action():
     return "MOVE"
 
 # =====================================================
-# EVENT LOOP
+# STEP
 # =====================================================
 
 def step_once():
     st.session_state.event += 1
-
     action = choose_action()
     update_body(action)
     update_touch()
+    update_vision()
     update_sound()
-
     save_memory()
 
     b = st.session_state.body
+    v = st.session_state.vision
     s = st.session_state.sound
 
     st.session_state.ledger.append({
         "event": st.session_state.event,
         "x": round(b["x"], 2),
         "v": round(b["v"], 2),
-        "dir": b["dir"],
         "touch": b["touch"],
-        "touch_timer": b["touch_timer"],
         "investigating": b["investigating"],
+        "light": v["light"],
         "heart": s["heart"],
         "foot": s["foot"],
         "rhythm": s["rhythm"],
         "disruption": s["disruption"],
-        "action": action,
     })
 
 # =====================================================
@@ -274,7 +307,6 @@ with c2:
 
 if step:
     step_once()
-
 if auto:
     for _ in range(20):
         step_once()
@@ -285,6 +317,9 @@ if auto:
 
 st.subheader("🧍 Body")
 st.json(st.session_state.body)
+
+st.subheader("👁️ Vision (Light / Dark)")
+st.json(st.session_state.vision)
 
 st.subheader("🔊 Sound")
 st.json(st.session_state.sound)
