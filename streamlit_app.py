@@ -3,7 +3,7 @@ import math
 import random
 
 # =====================================================
-# A7DO — Embodied World (Improved Motion)
+# A7DO — Embodied World (Improved Motion, FIXED)
 # =====================================================
 
 st.set_page_config(layout="wide")
@@ -18,6 +18,13 @@ BALL_REBOUND = 0.7
 
 BODY_SPEED = 0.4
 BODY_HEIGHT_BASE = 0.5
+
+# =====================================================
+# HELPERS (FIXED LOCATION)
+# =====================================================
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
 
 # =====================================================
 # INIT
@@ -101,7 +108,7 @@ def move_body():
 
     b["touch"] = touched
 
-    # vertical vibration from motion
+    # vertical vibration from motion (felt height)
     speed = math.sqrt(b["vx"]**2 + b["vy"]**2)
     b["z"] = BODY_HEIGHT_BASE + clamp(speed * 0.2, 0, 0.5)
 
@@ -145,7 +152,8 @@ def update_ball():
 
         # stop if slow
         if abs(ball["vx"]) < 0.02 and abs(ball["vy"]) < 0.02:
-            ball["vx"] = ball["vy"] = 0.0
+            ball["vx"] = 0.0
+            ball["vy"] = 0.0
             ball["moving"] = False
 
 # =====================================================
@@ -184,16 +192,18 @@ def step():
     update_ball()
     build_scene()
 
-    gps = st.session_state.gps
+    # GPS update
     b = st.session_state.body
-    gps["x"], gps["y"], gps["z"] = round(b["x"],2), round(b["y"],2), round(b["z"],2)
+    st.session_state.gps["x"] = round(b["x"], 2)
+    st.session_state.gps["y"] = round(b["y"], 2)
+    st.session_state.gps["z"] = round(b["z"], 2)
 
     cell = map_cell(b["x"], b["y"])
     update_map(cell, st.session_state.scene, b["touch"])
 
     st.session_state.log.append({
         "event": st.session_state.event,
-        "gps": gps.copy(),
+        "gps": st.session_state.gps.copy(),
         "touch": b["touch"],
         "scene": st.session_state.scene,
     })
@@ -227,10 +237,3 @@ st.json(st.session_state.map)
 with st.expander("📜 Log"):
     for row in st.session_state.log[-10:]:
         st.write(row)
-
-# =====================================================
-# HELPERS
-# =====================================================
-
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
