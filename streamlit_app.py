@@ -1,94 +1,152 @@
 import streamlit as st
 import random
-import copy
 import json
 import os
+import math
 
 # =====================================================
-# A7DO — BORN INTELLIGENCE
-# MAP memory + edge-triggered touch + ATTENTION (vision persistence)
+# A7DO — Born Intelligence (Current Full Build)
+# Vision: contrast gradients (no lights needed)
+# Sound: heartbeat + footsteps (rhythm)
+# Touch: edge-trigger + latch
+# Memory: MAP + ATTENTION + persistent save
 # =====================================================
 
 st.set_page_config(page_title="A7DO", layout="wide")
 st.title("🧠 A7DO — Born Intelligence")
-st.caption("Embodied • Remembering • Spatially aware • Attentive")
+st.caption("Embodied • Remembering • Spatially aware • Attentive (Vision/Sound gradients)")
 
-SAVE_FILE = "a7do_recall.json"
+SAVE_FILE = "a7do_memory.json"
 
-# =====================================================
+# -------------------------
 # CONSTANTS
-# =====================================================
-
-GRID_SIZE = 8
+# -------------------------
 WORLD_LIMIT = 20.0
-OBJECT_RADIUS = 1.5
 MAP_BIN_SIZE = 2.0
 
 TOUCH_PERSIST = 3
-ATTENTION_PERSIST = 6   # 👈 how long last-seen object stays “in mind”
+ATTENTION_PERSIST = 6
 
-MIN_AROUSAL = 0.15
 RECALL_ALPHA = 0.2
+MIN_AROUSAL = 0.15
+
+# movement / energy
+MIN_MOVE_V = 0.25
+MOVE_ACCEL = 0.10
+MOVE_COST = 0.04
+REST_GAIN = 0.07
+
+# vision field sampling
+GRAD_EPS = 0.35
+
+# field → energy coupling
+DARK_DRAIN_THRESHOLD = 0.65
+LIGHT_GAIN_THRESHOLD = 0.75
+
+# sound model
+BASE_HEART = 0.8
+HEART_AROUSAL_GAIN = 1.8
+FOOTSTEP_GAIN = 1.2
+DISRUPTION_GAIN = 1.0
 
 # appraisal weights
-W_K = 1.0
-W_E = 0.4
-W_T = 0.6
+W_ENERGY = 0.9
+W_TOUCH = 0.8
+W_DARK = 0.5
 
-# =====================================================
-# SAVE / LOAD (BACKWARD COMPATIBLE)
-# =====================================================
+# -------------------------
+# UTIL
+# -------------------------
+def clamp(x, lo=0.0, hi=1.0):
+    return max(lo, min(hi, x))
 
+def ema(old, new, a=RECALL_ALPHA):
+    return (1 - a) * old + a * new
+
+def map_bin(x):
+    start = float(int(x // MAP_BIN_SIZE) * MAP_BIN_SIZE)
+    return f"{start:.1f}"
+
+# -------------------------
+# SAVE / LOAD (backward compatible)
+# -------------------------
 def load_memory():
+    """
+    New format: {"recall": {...}, "map": {...}}
+    Old format: {...}  (treated as recall-only)
+    """
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as f:
             data = json.load(f)
 
-            # backward compatibility for older saves
-            if "recall" not in data:
-                return {"recall": data, "map": {}}
-
+        if isinstance(data, dict) and "recall" in data:
             if "map" not in data:
                 data["map"] = {}
-
             return data
+
+        return {"recall": data if isinstance(data, dict) else {}, "map": {}}
 
     return {"recall": {}, "map": {}}
 
 def save_memory():
     with open(SAVE_FILE, "w") as f:
         json.dump(
-            {
-                "recall": st.session_state.recall,
-                "map": st.session_state.map_memory,
-            },
+            {"recall": st.session_state.recall, "map": st.session_state.map_memory},
             f,
             indent=2,
         )
 
-# =====================================================
-# INIT
-# =====================================================
+# -------------------------
+# WORLD FIELD (Vision = contrast)
+# -------------------------
+def boundary_darkness(x: float) -> float:
+    # darker near edges, lighter near middle
+    center = WORLD_LIMIT / 2.0
+    d = abs(x - center) / center
+    return clamp(d ** 1.6)
 
+def mass_darkness(x: float, masses) -> float:
+    total = 0.0
+    for m in masses:
+        dx = abs(x - m["x"])
+        r = max(0.2, m["radius"])
+        bump = math.exp(- (dx / r) ** 2)
+        total += m["strength"] * bump
+    return clamp(total)
+
+def light_well(x: float, wells) -> float:
+    total = 0.0
+    for w in wells:
+        dx = abs(x - w["x"])
+        r = max(0.2, w["radius"])
+        bump = math.exp(- (dx / r) ** 2)
+        total += w["strength"] * bump
+    return clamp(total)
+
+def vision_field(x: float, masses, wells):
+    darkness = clamp(boundary_darkness(x) + mass_darkness(x, masses))
+    light = clamp((1.0 - darkness) + light_well(x, wells))
+    return darkness, light
+
+def vision_gradient(x: float, masses, wells):
+    x1 = clamp(x - GRAD_EPS, 0.0, WORLD_LIMIT)
+    x2 = clamp(x + GRAD_EPS, 0.0, WORLD_LIMIT)
+    d1, _ = vision_field(x1, masses, wells)
+    d2, _ = vision_field(x2, masses, wells)
+    return (d2 - d1) / max(1e-6, (x2 - x1))
+
+# -------------------------
+# INIT
+# -------------------------
 def init_state():
     mem = load_memory()
 
     st.session_state.event = 0
 
-    st.session_state.square = [
-        [random.random() for _ in range(GRID_SIZE)]
-        for _ in range(GRID_SIZE)
-    ]
-    st.session_state.prev_square = copy.deepcopy(st.session_state.square)
-
-    st.session_state.emotion = {
-        "arousal": 0.4,
-        "valence": 0.0,
-        "confidence": 0.3,
-    }
+    st.session_state.emotion = {"arousal": 0.4, "valence": 0.0, "confidence": 0.3}
 
     st.session_state.body = {
-        "x": random.uniform(2, WORLD_LIMIT - 2),
+        "x": random.uniform(3.0, WORLD_LIMIT - 3.0),
         "v": 0.0,
         "dir": random.choice([-1, 1]),
         "energy": 1.0,
@@ -97,89 +155,52 @@ def init_state():
         "was_touching": False,
     }
 
-    st.session_state.objects = [
-        {"type": "resource", "x": 5.0, "strength": 0.4},
-        {"type": "hazard", "x": 14.0, "strength": 0.5},
+    # "Mass" (darker) and "Open/light" (lighter) regions
+    st.session_state.masses = [
+        {"x": 14.0, "radius": 1.6, "strength": 0.75},  # dark / mass region
+    ]
+    st.session_state.wells = [
+        {"x": 5.0, "radius": 2.2, "strength": 0.55},   # light / recovery region
     ]
 
-    # Vision + Attention
     st.session_state.vision = {
-        "motion": 0.0,
-        "object": None,
-        "distance": None,
-
-        # 👇 ATTENTION STATE (persists after object leaves view)
-        "attention_object": None,
-        "attention_distance": None,
-        "attention_timer": 0,
+        "darkness": 0.0,
+        "light": 1.0,
+        "darkness_grad": 0.0,
+        "delta_darkness": 0.0,
+        "attn_darkness": None,
+        "attn_grad": None,
+        "attn_timer": 0,
     }
+    st.session_state.prev_darkness = None
+
+    st.session_state.sound = {
+        "heart_rate": 0.0,
+        "footsteps": 0.0,
+        "rhythm": 0.0,
+        "disruption": 0.0,
+    }
+    st.session_state.prev_rhythm = None
 
     st.session_state.recall = mem["recall"]
     st.session_state.map_memory = mem["map"]
+
     st.session_state.ledger = []
 
 if "event" not in st.session_state:
     init_state()
 
-# =====================================================
-# UTIL
-# =====================================================
-
-def clamp(x, lo=0.0, hi=1.0):
-    return max(lo, min(hi, x))
-
-def ema(old, new, a=RECALL_ALPHA):
-    return (1 - a) * old + a * new
-
-def map_bin(x):
-    return str(int(x // MAP_BIN_SIZE) * MAP_BIN_SIZE)
-
-# =====================================================
-# WORLD
-# =====================================================
-
-def square_step(grid):
-    return [
-        [clamp(v + random.uniform(-0.05, 0.05)) for v in row]
-        for row in grid
-    ]
-
-def square_features(grid):
-    flat = [v for r in grid for v in r]
-    mean = sum(flat) / len(flat)
-    var = sum((v - mean) ** 2 for v in flat) / len(flat)
-    return mean, var
-
-# =====================================================
-# BODY
-# =====================================================
-
-def update_body(action):
-    b = st.session_state.body
-
-    if action == "MOVE":
-        b["v"] = min(1.0, b["v"] + 0.1)
-        b["energy"] = max(0.0, b["energy"] - 0.05)
-
-    elif action == "REST":
-        b["v"] = 0.0
-        b["energy"] = min(1.0, b["energy"] + 0.08)
-
-    b["x"] += b["v"] * b["dir"]
-
-# =====================================================
-# TOUCH — EDGE TRIGGERED + LATCHED
-# =====================================================
-
+# -------------------------
+# TOUCH (edge-triggered + latched)
+# -------------------------
 def update_touch():
     b = st.session_state.body
     touching_now = False
 
-    if b["x"] <= 0:
-        b["x"] = 0
+    if b["x"] <= 0.0:
+        b["x"] = 0.0
         b["dir"] = 1
         touching_now = True
-
     elif b["x"] >= WORLD_LIMIT:
         b["x"] = WORLD_LIMIT
         b["dir"] = -1
@@ -196,245 +217,287 @@ def update_touch():
 
     b["was_touching"] = touching_now
 
-# =====================================================
+# -------------------------
 # VISION + ATTENTION
-# =====================================================
-
+# -------------------------
 def update_vision_and_attention():
+    b = st.session_state.body
     v = st.session_state.vision
 
-    # grid motion (novelty proxy)
-    prev = st.session_state.prev_square
-    curr = st.session_state.square
-    delta = sum(
-        abs(curr[i][j] - prev[i][j])
-        for i in range(GRID_SIZE)
-        for j in range(GRID_SIZE)
-    )
-    v["motion"] = delta / (GRID_SIZE ** 2)
+    d, l = vision_field(b["x"], st.session_state.masses, st.session_state.wells)
+    g = vision_gradient(b["x"], st.session_state.masses, st.session_state.wells)
 
-    # object sensing
-    b = st.session_state.body
-    nearest = None
-    nearest_dist = float("inf")
+    prev_d = st.session_state.prev_darkness
+    v["delta_darkness"] = 0.0 if prev_d is None else (d - prev_d)
+    st.session_state.prev_darkness = d
 
-    for obj in st.session_state.objects:
-        d = abs(obj["x"] - b["x"])
-        if d < nearest_dist:
-            nearest = obj
-            nearest_dist = d
+    v["darkness"] = d
+    v["light"] = l
+    v["darkness_grad"] = g
 
-    if nearest_dist <= OBJECT_RADIUS:
-        v["object"] = nearest
-        v["distance"] = round(nearest_dist, 2)
-
-        # 👇 ATTENTION REFRESH (edge: seen again)
-        v["attention_object"] = nearest
-        v["attention_distance"] = round(nearest_dist, 2)
-        v["attention_timer"] = ATTENTION_PERSIST
-
+    salient = (d > 0.65) or (abs(g) > 0.10)
+    if salient:
+        v["attn_darkness"] = d
+        v["attn_grad"] = g
+        v["attn_timer"] = ATTENTION_PERSIST
     else:
-        v["object"] = None
-        v["distance"] = None
-
-        # 👇 ATTENTION DECAY
-        if v["attention_timer"] > 0:
-            v["attention_timer"] -= 1
+        if v["attn_timer"] > 0:
+            v["attn_timer"] -= 1
         else:
-            v["attention_object"] = None
-            v["attention_distance"] = None
+            v["attn_darkness"] = None
+            v["attn_grad"] = None
 
-    st.session_state.prev_square = copy.deepcopy(curr)
+# -------------------------
+# SOUND (heartbeat + footsteps + disruption)
+# -------------------------
+def update_sound():
+    e = st.session_state.emotion
+    b = st.session_state.body
+    v = st.session_state.vision
+    s = st.session_state.sound
 
-# =====================================================
-# OBJECT EFFECTS (only when actually in contact range)
-# =====================================================
+    heart = BASE_HEART + HEART_AROUSAL_GAIN * e["arousal"]
+    foot = FOOTSTEP_GAIN * abs(b["v"])
+    rhythm = heart + foot
 
-def apply_object_effects():
-    obj = st.session_state.vision["object"]
+    prev_r = st.session_state.prev_rhythm
+    dr = 0.0 if prev_r is None else abs(rhythm - prev_r)
+    st.session_state.prev_rhythm = rhythm
+
+    disruption = DISRUPTION_GAIN * (dr + abs(v["delta_darkness"])) + (0.7 if b["touch"] else 0.0)
+
+    s["heart_rate"] = round(heart, 3)
+    s["footsteps"] = round(foot, 3)
+    s["rhythm"] = round(rhythm, 3)
+    s["disruption"] = round(disruption, 3)
+
+# -------------------------
+# BODY UPDATE
+# -------------------------
+def update_body(action: str):
     b = st.session_state.body
 
-    if not obj:
-        return 0.0
+    if action == "MOVE":
+        b["v"] = min(1.0, max(MIN_MOVE_V, b["v"] + MOVE_ACCEL))
+        b["energy"] = max(0.0, b["energy"] - MOVE_COST)
+    elif action == "REST":
+        b["v"] = 0.0
+        b["energy"] = min(1.0, b["energy"] + REST_GAIN)
 
-    if obj["type"] == "resource":
-        b["energy"] = clamp(b["energy"] + obj["strength"])
-        return +obj["strength"]
+    b["x"] += b["v"] * b["dir"]
 
-    if obj["type"] == "hazard":
-        b["energy"] = clamp(b["energy"] - obj["strength"])
-        return -obj["strength"]
+# -------------------------
+# ENERGY FROM FIELD (light recovers, dark drains)
+# -------------------------
+def apply_field_energy():
+    b = st.session_state.body
+    v = st.session_state.vision
 
-    return 0.0
+    before = b["energy"]
 
-# =====================================================
+    if v["darkness"] > DARK_DRAIN_THRESHOLD:
+        drain = (v["darkness"] - DARK_DRAIN_THRESHOLD) * 0.12
+        b["energy"] = clamp(b["energy"] - drain)
+
+    if v["light"] > LIGHT_GAIN_THRESHOLD:
+        gain = (v["light"] - LIGHT_GAIN_THRESHOLD) * 0.10
+        b["energy"] = clamp(b["energy"] + gain)
+
+    return b["energy"] - before
+
+# -------------------------
 # MAP MEMORY
-# =====================================================
-
+# -------------------------
 def update_map(valence, energy_delta):
     b = st.session_state.body
+    v = st.session_state.vision
     key = map_bin(b["x"])
 
     if key not in st.session_state.map_memory:
         st.session_state.map_memory[key] = {
             "visits": 0,
             "avg_valence": 0.0,
-            "touches": 0,
+            "avg_darkness": 0.0,
             "avg_energy_delta": 0.0,
+            "touches": 0,
         }
 
     cell = st.session_state.map_memory[key]
     cell["visits"] += 1
     cell["avg_valence"] = ema(cell["avg_valence"], valence)
+    cell["avg_darkness"] = ema(cell["avg_darkness"], v["darkness"])
     cell["avg_energy_delta"] = ema(cell["avg_energy_delta"], energy_delta)
     if b["touch"]:
         cell["touches"] += 1
 
-# =====================================================
-# RECALL
-# =====================================================
+# -------------------------
+# RECALL (lightweight)
+# -------------------------
+def recall_key():
+    b = st.session_state.body
+    v = st.session_state.vision
+    dk = round(v["darkness"], 2)
+    return f"{map_bin(b['x'])}|D{dk}"
 
-def recall_get(sig):
-    if sig not in st.session_state.recall:
-        st.session_state.recall[sig] = {
-            "count": 0,
-            "expected_K": 0.3,
-            "valence": 0.0,
-        }
-    return st.session_state.recall[sig]
+def recall_get(k):
+    r = st.session_state.recall
+    if k not in r:
+        r[k] = {"count": 0, "valence": 0.0, "expected_dark": 0.5}
+    return r[k]
 
-def appraisal(sig, K, energy_delta, touch):
-    r = recall_get(sig)
-    dK = r["expected_K"] - K
-    t = 1.0 if touch else 0.0
-    raw = W_K * dK + W_E * energy_delta - W_T * t
-    return max(-1.0, min(1.0, raw * 2))
+def recall_update(k, valence):
+    rec = recall_get(k)
+    rec["count"] += 1
+    rec["valence"] = ema(rec["valence"], valence)
+    rec["expected_dark"] = ema(rec["expected_dark"], st.session_state.vision["darkness"])
 
-def recall_update(sig, K, val):
-    r = recall_get(sig)
-    r["count"] += 1
-    r["expected_K"] = ema(r["expected_K"], K)
-    r["valence"] = ema(r["valence"], val)
+# -------------------------
+# APPRAISAL → VALENCE
+# -------------------------
+def appraise(energy_delta):
+    b = st.session_state.body
+    v = st.session_state.vision
+    raw = (W_ENERGY * energy_delta) - (W_DARK * v["darkness"]) - (W_TOUCH * (1.0 if b["touch"] else 0.0))
+    return max(-1.0, min(1.0, raw * 2.5))
 
-# =====================================================
-# EMOTION
-# =====================================================
-
-def update_emotion(val):
+# -------------------------
+# EMOTION UPDATE
+# -------------------------
+def update_emotion(valence):
     e = st.session_state.emotion
-    e["valence"] = val
-    e["arousal"] = clamp(e["arousal"] + abs(val))
-    e["confidence"] = clamp(e["confidence"] + 0.05 * (1 - abs(val)))
+    s = st.session_state.sound
+
+    e["arousal"] = clamp(e["arousal"] + 0.10 * s["disruption"])
     e["arousal"] = max(MIN_AROUSAL, e["arousal"])
 
-# =====================================================
-# CHOICE (MAP + ATTENTION)
-# =====================================================
+    e["confidence"] = clamp(e["confidence"] + 0.03 * (1.0 - clamp(s["disruption"] / 2.0)))
+    e["valence"] = valence
 
+# -------------------------
+# CHOICE (MAP + ATTENTION + GRADIENT)
+# -------------------------
 def choose_action():
     b = st.session_state.body
     v = st.session_state.vision
 
-    # basic survival
-    if b["energy"] < 0.4:
+    # survival: rest if low energy
+    if b["energy"] < 0.35:
         return "REST"
 
-    # MAP avoidance
+    # map-based avoidance
     cell = st.session_state.map_memory.get(map_bin(b["x"]))
-    if cell and cell["avg_valence"] < -0.2:
+    if cell and cell["avg_valence"] < -0.25:
         b["dir"] *= -1
         return "MOVE"
 
-    # Immediate perception
-    if v["object"]:
-        if v["object"]["type"] == "resource":
-            return "MOVE"
-        if v["object"]["type"] == "hazard":
-            b["dir"] *= -1
+    # if moving forward gets darker (grad * dir > 0), reverse
+    if (v["darkness_grad"] * b["dir"] > 0.10) and (v["darkness"] > 0.55):
+        b["dir"] *= -1
+        return "MOVE"
+
+    # attention: if we recently sensed "dangerous dark", keep moving away from gradient
+    if v["attn_timer"] > 0 and v["attn_darkness"] is not None:
+        if v["attn_darkness"] > 0.70:
+            # move opposite direction of increasing darkness
+            if v["attn_grad"] is not None and v["attn_grad"] != 0:
+                b["dir"] = -1 if v["attn_grad"] > 0 else 1
             return "MOVE"
 
-    # 👇 ATTENTION: pursue/avoid remembered object even if not currently visible
-    if v["attention_object"]:
-        if v["attention_object"]["type"] == "resource":
-            return "MOVE"
-        if v["attention_object"]["type"] == "hazard":
-            b["dir"] *= -1
-            return "MOVE"
+    # otherwise: explore with slight bias toward light
+    # if current area is very light, rest sometimes (enjoy stability)
+    if v["light"] > 0.90 and random.random() < 0.35:
+        return "REST"
 
-    return random.choice(["MOVE", "REST"])
+    return "MOVE"
 
-# =====================================================
+# -------------------------
 # CONTROLS
-# =====================================================
-
-c1, c2 = st.columns(2)
+# -------------------------
+c1, c2, c3 = st.columns(3)
 with c1:
     step = st.button("▶ Advance Event")
 with c2:
+    auto = st.toggle("Auto-run (10 steps)", value=False)
+with c3:
     if st.button("⟲ Rebirth (keep memory)"):
         init_state()
-        st.experimental_rerun()
+        st.rerun()
 
-# =====================================================
+# -------------------------
 # EVENT LOOP
-# =====================================================
-
-if step:
+# -------------------------
+def do_one_step():
     st.session_state.event += 1
-
-    st.session_state.square = square_step(st.session_state.square)
-
-    mean, var = square_features(st.session_state.square)
-    K = var / (1 - mean + 1e-6)
-    sig = f"{round(mean,2)}|{round(var,2)}"
 
     action = choose_action()
     update_body(action)
     update_touch()
     update_vision_and_attention()
+    update_sound()
 
     energy_before = st.session_state.body["energy"]
-    apply_object_effects()
+    energy_delta_field = apply_field_energy()
     energy_delta = st.session_state.body["energy"] - energy_before
 
-    val = appraisal(sig, K, energy_delta, st.session_state.body["touch"])
-    recall_update(sig, K, val)
+    val = appraise(energy_delta)
+    rk = recall_key()
+    recall_update(rk, val)
     update_map(val, energy_delta)
     update_emotion(val)
 
     save_memory()
 
+    b = st.session_state.body
+    v = st.session_state.vision
+    s = st.session_state.sound
+
     st.session_state.ledger.append({
         "event": st.session_state.event,
-        "x": round(st.session_state.body["x"], 2),
-        "bin": map_bin(st.session_state.body["x"]),
-        "touch": st.session_state.body["touch"],
-        "touch_timer": st.session_state.body["touch_timer"],
-        "energy": round(st.session_state.body["energy"], 2),
-        "seen_object": st.session_state.vision["object"],
-        "attn_object": st.session_state.vision["attention_object"],
-        "attn_timer": st.session_state.vision["attention_timer"],
-        "valence": round(val, 2),
-        "action": action,
+        "x": round(b["x"], 2),
+        "bin": map_bin(b["x"]),
+        "dir": b["dir"],
+        "v": round(b["v"], 2),
+        "energy": round(b["energy"], 2),
+        "touch": b["touch"],
+        "touch_timer": b["touch_timer"],
+        "dark": round(v["darkness"], 3),
+        "light": round(v["light"], 3),
+        "grad": round(v["darkness_grad"], 3),
+        "attn_timer": v["attn_timer"],
+        "valence": round(val, 3),
+        "heart": s["heart_rate"],
+        "rhythm": s["rhythm"],
+        "disruption": s["disruption"],
     })
 
-# =====================================================
-# DISPLAY
-# =====================================================
+if step:
+    do_one_step()
 
+if auto:
+    # do a small batch without needing rerun loops
+    for _ in range(10):
+        do_one_step()
+
+# -------------------------
+# DISPLAY
+# -------------------------
 st.subheader("🧍 Body")
 st.json(st.session_state.body)
 
-st.subheader("👁️ Vision + Attention")
+st.subheader("👁️ Vision + Attention (gradients)")
 st.json(st.session_state.vision)
+
+st.subheader("🔊 Sound (heartbeat + footsteps)")
+st.json(st.session_state.sound)
 
 st.subheader("❤️ Emotion")
 st.json(st.session_state.emotion)
 
-st.subheader("🗺️ MAP Memory")
-for k, v in st.session_state.map_memory.items():
-    st.write(k, v)
+st.subheader("🗺️ MAP Memory (bins)")
+# show only sorted bins for readability
+for k in sorted(st.session_state.map_memory.keys(), key=lambda x: float(x)):
+    st.write(k, st.session_state.map_memory[k])
 
-with st.expander("📜 Ledger (Last 10)"):
-    for row in st.session_state.ledger[-10:]:
+with st.expander("📜 Ledger (Last 15)"):
+    for row in st.session_state.ledger[-15:]:
         st.write(row)
